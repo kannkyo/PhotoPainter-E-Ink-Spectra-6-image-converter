@@ -1,0 +1,5 @@
+# Ignore the images directory
+.venv/
+__pycache__/
+build/
+*.spec
