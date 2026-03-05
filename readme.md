@@ -16,7 +16,7 @@ E-ink screens have unique color limitations and characteristics. This converter 
 *   **Color Quantization**: Reducing the image's color palette to the 6 specific colors supported by the e-ink screen.
 *   **Dithering**: Applying dithering algorithms to simulate intermediate colors and improve perceived detail.
 *   **Added Atkinson Dithering**: Unlike Floyd–Steinberg dithering, it has a more localized dither, creating more visually pleasing pictures. It is much slower.
-*   **Resizing and Cropping**: Adjusting image dimensions to match the e-ink display's resolution (800x480 or 480x800) while maintaining aspect ratio.
+*   **Resizing and Cropping**: Adjusting image dimensions to match the e-ink display's resolution (1600x1200 or 1200x1600) while maintaining aspect ratio.
 *   **Image Enhancements**: Applying adjustments like brightness, contrast, and saturation to make the image appear more vibrant and clear on the e-ink display. Adjusted the relative contribution of rgb_dist vs luma_dist, so that hue errors are more important. Also tuned the Weight compensation in distance metric.
 *   **HEIC Support**: Enabling the processing of HEIC image files.
 *   **Progress Bar**: for folder processing, especially handy for large numbers of files.

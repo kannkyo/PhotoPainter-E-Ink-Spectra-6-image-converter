@@ -131,14 +131,14 @@ def process_image(image_file):
         # Specified target size
         if display_direction:
             if display_direction == 'landscape':
-                target_width, target_height = 800, 480
+                target_width, target_height = 1600, 1200
             else:
-                target_width, target_height = 480, 800
+                target_width, target_height = 1200, 1600
         else:
             if  width > height:
-                target_width, target_height = 800, 480
+                target_width, target_height = 1600, 1200
             else:
-                target_width, target_height = 480, 800
+                target_width, target_height = 1200, 1600
         
         if display_mode == 'scale':
             # Computed scaling
