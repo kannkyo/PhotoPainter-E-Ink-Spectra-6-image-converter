@@ -96,6 +96,8 @@ parser = argparse.ArgumentParser(description='Process some images.')
 # Add orientation parameter
 parser.add_argument('input_paths', nargs='+', type=str, help='Input image file(s) or directory')
 parser.add_argument('--dir', choices=['landscape', 'portrait'], help='Image direction (landscape or portrait)')
+parser.add_argument('--width', type=int, help='Target image width in pixels (overrides --dir)')
+parser.add_argument('--height', type=int, help='Target image height in pixels (overrides --dir)')
 parser.add_argument('--mode', choices=['scale', 'cut'], default='scale', help='Image conversion mode (scale or cut)')
 parser.add_argument('--dither', type=int, choices=[0, 1, 3], default=1, help='Image dithering algorithm (0 for NONE, 1 for ATKINSON (slow), 3 for FLOYDSTEINBERG)')
 # Add enhancement arguments
@@ -106,6 +108,12 @@ parser.add_argument('--saturation', type=float, default=1.2, help='Color saturat
 
 # Parse command line arguments
 args = parser.parse_args()
+
+# Validate --width and --height
+if args.width is not None and args.width <= 0:
+    parser.error('--width must be a positive integer')
+if args.height is not None and args.height <= 0:
+    parser.error('--height must be a positive integer')
 
 # Add comments about dithering options
 if args.dither == 3:  # Floyd-Steinberg
@@ -139,6 +147,12 @@ def process_image(image_file):
                 target_width, target_height = 1600, 1200
             else:
                 target_width, target_height = 1200, 1600
+
+        # Override with explicit --width / --height if provided
+        if args.width is not None:
+            target_width = args.width
+        if args.height is not None:
+            target_height = args.height
         
         if display_mode == 'scale':
             # Computed scaling
