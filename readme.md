@@ -20,6 +20,7 @@ E-ink screens have unique color limitations and characteristics. This converter 
 *   **Image Enhancements**: Applying adjustments like brightness, contrast, and saturation to make the image appear more vibrant and clear on the e-ink display. Adjusted the relative contribution of rgb_dist vs luma_dist, so that hue errors are more important. Also tuned the Weight compensation in distance metric.
 *   **HEIC Support**: Enabling the processing of HEIC image files.
 *   **Progress Bar**: for folder processing, especially handy for large numbers of files.
+*   **NVIDIA GPU Acceleration** (`--gpu`): Optionally offload colour quantization to an NVIDIA GPU via PyTorch CUDA, significantly speeding up processing – especially for the no-dithering mode (`--dither 0`) where all pixels are processed in a single GPU batch.
 
 ## Comparison
 
@@ -74,6 +75,28 @@ A prebuilt windows .exe is supplied. Just drag and drop image files or a folder.
     ```bash
     python ConvertTo6ColorsForEInkSpectra6.py images/my_photo.jpg --mode cut --contrast 1.5 --saturation 1.1 --dither 3
     ```
+
+5.  **Enable NVIDIA GPU acceleration**:
+
+    First install PyTorch with CUDA support (see `requirements-gpu.txt` for version-specific commands):
+    ```bash
+    # Example for CUDA 12.1:
+    pip install torch --index-url https://download.pytorch.org/whl/cu121
+    ```
+    Then run with the `--gpu` flag:
+    ```bash
+    python ConvertTo6ColorsForEInkSpectra6.py images/my_photo.jpg --gpu
+    python ConvertTo6ColorsForEInkSpectra6.py images/my_photo.jpg --gpu --dither 0   # fastest GPU path
+    python ConvertTo6ColorsForEInkSpectra6.py images/my_photo.jpg --gpu --dither 1   # Atkinson on GPU
+    ```
+
+    The script falls back gracefully to CPU if PyTorch is not installed or no CUDA GPU is detected.
+
+    | Mode | GPU behaviour |
+    |---|---|
+    | `--dither 0` (NONE) | All pixels quantised in a single GPU batch – **biggest speedup** |
+    | `--dither 1` (Atkinson) | Sequential pixel loop on CPU; distance calculations and working buffer stay on the GPU |
+    | `--dither 3` (Floyd-Steinberg) | Handled by PIL; GPU flag has no effect on this path |
 
 ## Implementation Details
 

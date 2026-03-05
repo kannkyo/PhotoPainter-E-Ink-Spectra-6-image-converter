@@ -10,6 +10,13 @@ from tqdm import tqdm
 
 pillow_heif.register_heif_opener()
 
+# Optional GPU support via PyTorch
+try:
+    import torch
+    _torch_available = True
+except ImportError:
+    _torch_available = False
+
 # Define the 6-color palette (black, white, yellow, red, blue, green)
 # Extracted from the putpalette call: (0,0,0, 255,255,255, 255,255,0, 255,0,0, 0,0,255, 0,255,0)
 # Using Compensated Colors R, Y, G, B
@@ -55,6 +62,107 @@ def closest_palette_color(rgb):
     
     # Find minimum distance index
     return np.argmin(total_dist)
+
+# GPU-accelerated quantization (no dithering) – all pixels processed in a single GPU batch
+def quantize_none_gpu(image, device):
+    """Fully vectorised GPU quantization with no dithering (dither=0).
+
+    All pixels are matched to the closest palette colour simultaneously on the
+    GPU, giving a large speed-up compared to the equivalent CPU loop.
+    """
+    img_array = np.array(image.convert('RGB'))
+    height, width, _ = img_array.shape
+
+    # Build palette tensors on the target device once
+    palette = torch.tensor(PALETTE_COLORS, dtype=torch.float32, device=device)          # (6, 3)
+    palette_luma = torch.tensor(
+        [r * 250 + g * 350 + b * 400 for (r, g, b) in PALETTE_COLORS],
+        dtype=torch.float32, device=device,
+    ) / (255.0 * 1000)                                                                   # (6,)
+
+    # Move the whole image to the GPU as a flat (N, 3) tensor
+    flat = torch.tensor(img_array.reshape(-1, 3), dtype=torch.float32, device=device)   # (N, 3)
+
+    diff = flat.unsqueeze(1) - palette.unsqueeze(0)                                      # (N, 6, 3)
+
+    luma1 = (flat[:, 0] * 250 + flat[:, 1] * 350 + flat[:, 2] * 400) / (255.0 * 1000) # (N,)
+
+    rgb_dist = (
+        diff[:, :, 0].pow(2) * 0.250
+        + diff[:, :, 1].pow(2) * 0.350
+        + diff[:, :, 2].pow(2) * 0.400
+    ) * 0.75 / (255.0 * 255.0)                                                          # (N, 6)
+
+    luma_diff = luma1.unsqueeze(1) - palette_luma.unsqueeze(0)                          # (N, 6)
+    luma_dist = luma_diff.pow(2)
+
+    total_dist = 1.5 * rgb_dist + 0.60 * luma_dist                                      # (N, 6)
+    indices = total_dist.argmin(dim=1)                                                   # (N,)
+
+    result = palette[indices].reshape(height, width, 3).clamp(0, 255).to(torch.uint8).cpu().numpy()
+    return Image.fromarray(result)
+
+
+# GPU-accelerated Atkinson dithering – image data stays on GPU throughout
+def quantize_atkinson_gpu(image, device):
+    """Atkinson dithering with GPU-resident working buffer.
+
+    The error-diffusion loop is inherently sequential so the Python loop is
+    retained, but all pixel data (working buffer, palette, errors) stay on the
+    GPU.  This avoids repeated CPU↔GPU transfers and keeps the expensive
+    palette-distance arithmetic on the GPU.
+    """
+    img_array = np.array(image.convert('RGB'))
+    height, width, _ = img_array.shape
+
+    # Palette tensors – created once on the target device
+    palette = torch.tensor(PALETTE_COLORS, dtype=torch.float32, device=device)      # (6, 3)
+    palette_luma = torch.tensor(
+        [r * 250 + g * 350 + b * 400 for (r, g, b) in PALETTE_COLORS],
+        dtype=torch.float32, device=device,
+    ) / (255.0 * 1000)                                                               # (6,)
+
+    # Upload the whole image to the GPU once
+    working_img = torch.tensor(img_array, dtype=torch.float32, device=device)       # (H, W, 3)
+
+    for y in range(height):
+        for x in range(width):
+            pixel = working_img[y, x].clamp(0, 255)                                 # (3,)
+
+            # Distance to every palette colour – computed entirely on the GPU
+            diff = pixel.unsqueeze(0) - palette                                      # (6, 3)
+            luma1 = (pixel[0] * 250 + pixel[1] * 350 + pixel[2] * 400) / (255.0 * 1000)
+
+            rgb_dist = (
+                diff[:, 0].pow(2) * 0.250
+                + diff[:, 1].pow(2) * 0.350
+                + diff[:, 2].pow(2) * 0.400
+            ) * 0.75 / (255.0 * 255.0)                                              # (6,)
+
+            luma_diff = luma1 - palette_luma                                         # (6,)
+            luma_dist = luma_diff.pow(2)
+
+            total_dist = 1.5 * rgb_dist + 0.60 * luma_dist                          # (6,)
+            idx = total_dist.argmin()                                                # 0-d GPU tensor
+
+            new_pixel = palette[idx]                                                 # (3,) – on GPU
+            error = pixel - new_pixel
+
+            working_img[y, x] = new_pixel
+
+            # Atkinson error distribution (forward only, same weights as CPU version)
+            if x + 1 < width:
+                working_img[y, x + 1] += error * (1 / 8)
+            if y + 1 < height:
+                if x - 1 >= 0:
+                    working_img[y + 1, x - 1] += error * (1 / 8)
+                working_img[y + 1, x] += error * (1 / 4)
+                if x + 1 < width:
+                    working_img[y + 1, x + 1] += error * (1 / 8)
+
+    result = working_img.clamp(0, 255).to(torch.uint8).cpu().numpy()
+    return Image.fromarray(result)
+
 
 # Atkinson dithering implementation with floating-point error diffusion for accuracy
 def quantize_atkinson(image):
@@ -102,10 +210,24 @@ parser.add_argument('--dither', type=int, choices=[0, 1, 3], default=1, help='Im
 parser.add_argument('--brightness', type=float, default=1.1, help='Brightness factor (1.0 = no change)')
 parser.add_argument('--contrast', type=float, default=1.2, help='Contrast factor (1.0 = no change)')
 parser.add_argument('--saturation', type=float, default=1.2, help='Color saturation factor (1.0 = no change)')
+parser.add_argument('--gpu', action='store_true', default=False,
+                    help='Use NVIDIA GPU (CUDA) for accelerated quantization. Requires PyTorch with CUDA support.')
 
 
 # Parse command line arguments
 args = parser.parse_args()
+
+# Resolve GPU device
+gpu_device = None
+if args.gpu:
+    if not _torch_available:
+        print("Warning: --gpu requested but PyTorch is not installed. Falling back to CPU.")
+        print("         Install GPU support with: pip install -r requirements-gpu.txt")
+    elif not torch.cuda.is_available():
+        print("Warning: --gpu requested but no CUDA-capable GPU was detected. Falling back to CPU.")
+    else:
+        gpu_device = torch.device("cuda")
+        print(f"GPU acceleration enabled: {torch.cuda.get_device_name(gpu_device)}")
 
 # Add comments about dithering options
 if args.dither == 3:  # Floyd-Steinberg
@@ -196,7 +318,15 @@ def process_image(image_file):
 
         
         # The color quantization and dithering algorithms are performed, and the results are converted to RGB mode
-        if args.dither == 1:  # Atkinson dithering
+        if gpu_device is not None:
+            # GPU-accelerated paths
+            if args.dither == 1:  # Atkinson – GPU tensor loop
+                quantized_image = quantize_atkinson_gpu(enhanced_image, gpu_device).convert('RGB')
+            elif args.dither == 0:  # No dithering – fully vectorised GPU batch
+                quantized_image = quantize_none_gpu(enhanced_image, gpu_device).convert('RGB')
+            else:  # Floyd-Steinberg – PIL handles this; GPU not used for this path
+                quantized_image = enhanced_image.quantize(dither=display_dither, palette=pal_image).convert('RGB')
+        elif args.dither == 1:  # Atkinson dithering (CPU)
             quantized_image = quantize_atkinson(enhanced_image).convert('RGB')
         else:
             quantized_image = enhanced_image.quantize(dither=display_dither, palette=pal_image).convert('RGB')

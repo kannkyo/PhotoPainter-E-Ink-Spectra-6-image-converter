@@ -1,0 +1,15 @@
+# GPU acceleration dependencies (NVIDIA CUDA)
+# Install these IN ADDITION to requirements.txt to enable the --gpu flag.
+#
+# PyTorch with CUDA support – choose the command that matches your CUDA version
+# from https://pytorch.org/get-started/locally/
+#
+# Example for CUDA 12.1:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+#
+# Example for CUDA 11.8:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu118
+#
+# CPU-only fallback (no GPU acceleration, but lets you test the --gpu code path):
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.0.0
