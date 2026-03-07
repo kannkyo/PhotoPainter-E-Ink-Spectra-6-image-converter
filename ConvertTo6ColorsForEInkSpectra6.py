@@ -212,8 +212,19 @@ def process_image(image_file):
         # Determine dithering method label
         dither_label = 'ATK' if args.dither == 1 else 'FS' if args.dither == 3 else ''
         output_filename = os.path.splitext(image_file)[0] + '_' + display_mode + ('_' + dither_label if dither_label else '') + '_output.bmp'
-        quantized_image.save(output_filename)
 
+        # Skip if a file with the same name and same size already exists.
+        # BMP file size for a 24-bit RGB image: 54-byte header + row-aligned pixel data.
+        row_stride = ((target_width * 3 + 3) // 4) * 4
+        expected_size = 54 + row_stride * target_height
+        try:
+            if os.stat(output_filename).st_size == expected_size:
+                print(f'Skipping {output_filename} (already exists with same size)')
+                return
+        except OSError:
+            pass
+
+        quantized_image.save(output_filename)
         print(f'Successfully converted {image_file} to {output_filename}')
     except Exception as e:
         print(f'Error processing {image_file}: {e}')
