@@ -96,8 +96,8 @@ parser = argparse.ArgumentParser(description='Process some images.')
 # Add orientation parameter
 parser.add_argument('input_paths', nargs='+', type=str, help='Input image file(s) or directory')
 parser.add_argument('--dir', choices=['landscape', 'portrait'], help='Image direction (landscape or portrait)')
-parser.add_argument('--width', type=int, help='Target image width in pixels (overrides --dir)')
-parser.add_argument('--height', type=int, help='Target image height in pixels (overrides --dir)')
+parser.add_argument('--width', type=int, default=1200, help='Target image width in pixels (default: 1200)')
+parser.add_argument('--height', type=int, default=1600, help='Target image height in pixels (default: 1600)')
 parser.add_argument('--mode', choices=['scale', 'cut'], default='scale', help='Image conversion mode (scale or cut)')
 parser.add_argument('--dither', type=int, choices=[0, 1, 3], default=1, help='Image dithering algorithm (0 for NONE, 1 for ATKINSON (slow), 3 for FLOYDSTEINBERG)')
 # Add enhancement arguments
@@ -110,9 +110,9 @@ parser.add_argument('--saturation', type=float, default=1.2, help='Color saturat
 args = parser.parse_args()
 
 # Validate --width and --height
-if args.width is not None and args.width <= 0:
+if args.width <= 0:
     parser.error('--width must be a positive integer')
-if args.height is not None and args.height <= 0:
+if args.height <= 0:
     parser.error('--height must be a positive integer')
 
 # Add comments about dithering options
@@ -137,23 +137,8 @@ def process_image(image_file):
         width, height = input_image.size
 
         # Specified target size
-        if display_direction:
-            if display_direction == 'landscape':
-                target_width, target_height = 1600, 1200
-            else:
-                target_width, target_height = 1200, 1600
-        else:
-            if  width > height:
-                target_width, target_height = 1600, 1200
-            else:
-                target_width, target_height = 1200, 1600
+        target_width, target_height = args.width, args.height
 
-        # Override with explicit --width / --height if provided
-        if args.width is not None:
-            target_width = args.width
-        if args.height is not None:
-            target_height = args.height
-        
         if display_mode == 'scale':
             # Computed scaling
             scale_ratio = max(target_width / width, target_height / height)
