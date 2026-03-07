@@ -1,5 +1,0 @@
-Pillow
-pillow-heif
-scikit-image
-tqdm
-numpy
