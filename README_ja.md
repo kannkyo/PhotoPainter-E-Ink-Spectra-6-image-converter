@@ -87,7 +87,7 @@ e-inkスクリーンには独特の色制限と特性があります。このコ
 4. **特定のオプションを使用**:
 
     ```bash
-    python ConvertTo6ColorsForEInkSpectra6.py images/my_photo.jpg --mode cut --contrast 1.5 --saturation 1.1 --dither 3
+    python ConvertTo6ColorsForEInkSpectra6.py images/my_photo.jpg --cut --contrast 1.5 --saturation 1.1 --dither 3
     ```
 
 ## 実装の詳細

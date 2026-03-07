@@ -96,9 +96,10 @@ parser = argparse.ArgumentParser(description='Process some images.')
 # Add orientation parameter
 parser.add_argument('input_paths', nargs='+', type=str, help='Input image file(s) or directory')
 parser.add_argument('--dir', choices=['landscape', 'portrait'], help='Image direction (landscape or portrait)')
-parser.add_argument('--width', type=int, default=1200, help='Target image width in pixels (default: 1200)')
-parser.add_argument('--height', type=int, default=1600, help='Target image height in pixels (default: 1600)')
-parser.add_argument('--mode', choices=['scale', 'cut'], default='scale', help='Image conversion mode (scale or cut)')
+parser.add_argument('--width', type=int, default=None, help='Target image width in pixels (default: 1200, cannot be used with --cut or --scale)')
+parser.add_argument('--height', type=int, default=None, help='Target image height in pixels (default: 1600, cannot be used with --cut or --scale)')
+parser.add_argument('--cut', action='store_true', help='Crop and pad image to target size instead of scaling to fit (cannot be used with --width, --height, or --scale)')
+parser.add_argument('--scale', type=float, help='Scale factor for resizing, e.g. 0.5 for 50%% of original size (cannot be used with --width, --height, or --cut)')
 parser.add_argument('--dither', type=int, choices=[0, 1, 3], default=1, help='Image dithering algorithm (0 for NONE, 1 for ATKINSON (slow), 3 for FLOYDSTEINBERG)')
 # Add enhancement arguments
 parser.add_argument('--brightness', type=float, default=1.1, help='Brightness factor (1.0 = no change)')
@@ -110,12 +111,27 @@ parser.add_argument('--switchbot-133', action='store_true', help='Preset for Swi
 # Parse command line arguments
 args = parser.parse_args()
 
+# Validate mutual exclusivity of --cut, --width/--height, and --scale
+width_or_height_set = args.width is not None or args.height is not None
+if args.cut and width_or_height_set:
+    parser.error('--cut cannot be used together with --width or --height')
+if args.cut and args.scale is not None:
+    parser.error('--cut cannot be used together with --scale')
+if args.scale is not None and width_or_height_set:
+    parser.error('--scale cannot be used together with --width or --height')
+
 # Apply --switchbot-133 preset (width=1200, height=1600; swap if --dir is specified)
 if args.switchbot_133:
     args.width = 1200
     args.height = 1600
     if args.dir == 'landscape':
         args.width, args.height = args.height, args.width
+
+# Apply default width and height if not explicitly set
+if args.width is None:
+    args.width = 1200
+if args.height is None:
+    args.height = 1600
 
 # Validate --width and --height
 if args.width <= 0:
@@ -132,7 +148,7 @@ elif args.dither == 1:  # Atkinson
 # Get input parameters
 input_paths = args.input_paths
 display_direction = args.dir
-display_mode = args.mode
+display_mode = 'cut' if args.cut else 'scale'
 display_dither = Image.Dither(args.dither)
 
 # Define function to process a single image file
@@ -148,21 +164,27 @@ def process_image(image_file):
         target_width, target_height = args.width, args.height
 
         if display_mode == 'scale':
-            # Computed scaling
-            scale_ratio = max(target_width / width, target_height / height)
+            if args.scale is not None:
+                # Scale by factor
+                resized_width = int(width * args.scale)
+                resized_height = int(height * args.scale)
+                resized_image = input_image.resize((resized_width, resized_height))
+            else:
+                # Computed scaling to fit target dimensions
+                scale_ratio = max(target_width / width, target_height / height)
 
-            # Calculate the size after scaling
-            resized_width = int(width * scale_ratio)
-            resized_height = int(height * scale_ratio)
+                # Calculate the size after scaling
+                resized_width = int(width * scale_ratio)
+                resized_height = int(height * scale_ratio)
 
-            # Resize image
-            output_image = input_image.resize((resized_width, resized_height))
+                # Resize image
+                output_image = input_image.resize((resized_width, resized_height))
 
-            # Create the target image and center the resized image
-            resized_image = Image.new('RGB', (target_width, target_height), (255, 255, 255))
-            left = (target_width - resized_width) // 2
-            top = (target_height - resized_height) // 2
-            resized_image.paste(output_image, (left, top))
+                # Create the target image and center the resized image
+                resized_image = Image.new('RGB', (target_width, target_height), (255, 255, 255))
+                left = (target_width - resized_width) // 2
+                top = (target_height - resized_height) // 2
+                resized_image.paste(output_image, (left, top))
         elif display_mode == 'cut':
             # Calculate the fill size to add or the area to crop
             if width / height >= target_width / target_height:

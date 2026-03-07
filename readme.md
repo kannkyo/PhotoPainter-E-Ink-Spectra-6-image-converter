@@ -89,7 +89,7 @@ A prebuilt windows .exe is supplied. Just drag and drop image files or a folder.
 4. **Use specific options**:
 
     ```bash
-    python ConvertTo6ColorsForEInkSpectra6.py images/my_photo.jpg --mode cut --contrast 1.5 --saturation 1.1 --dither 3
+    python ConvertTo6ColorsForEInkSpectra6.py images/my_photo.jpg --cut --contrast 1.5 --saturation 1.1 --dither 3
     ```
 
 5. **Convert for SwitchBot AI Canvas 13.3 inch** (portrait, 1200×1600):
