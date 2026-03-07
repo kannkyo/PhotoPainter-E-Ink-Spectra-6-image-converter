@@ -7,10 +7,10 @@ name = "photopainter-eink-spectra6-converter"
 version = "1.0.0"
 description = "Image converter for the Waveshare 7.3-inch E-Ink Spectra 6 display"
 readme = "readme.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
-    "Pillow",
+    "Pillow>=12.1.1",
     "pillow-heif",
     "scikit-image",
     "tqdm",
