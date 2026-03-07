@@ -104,10 +104,18 @@ parser.add_argument('--dither', type=int, choices=[0, 1, 3], default=1, help='Im
 parser.add_argument('--brightness', type=float, default=1.1, help='Brightness factor (1.0 = no change)')
 parser.add_argument('--contrast', type=float, default=1.2, help='Contrast factor (1.0 = no change)')
 parser.add_argument('--saturation', type=float, default=1.2, help='Color saturation factor (1.0 = no change)')
+parser.add_argument('--switchbot-133', action='store_true', help='Preset for SwitchBot AI Canvas 13.3 inch (width=1200, height=1600; swapped when --dir is also specified)')
 
 
 # Parse command line arguments
 args = parser.parse_args()
+
+# Apply --switchbot-133 preset (width=1200, height=1600; swap if --dir is specified)
+if args.switchbot_133:
+    args.width = 1200
+    args.height = 1600
+    if args.dir == 'landscape':
+        args.width, args.height = args.height, args.width
 
 # Validate --width and --height
 if args.width <= 0:
