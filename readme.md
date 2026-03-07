@@ -92,19 +92,27 @@ A prebuilt windows .exe is supplied. Just drag and drop image files or a folder.
     python ConvertTo6ColorsForEInkSpectra6.py images/my_photo.jpg --mode cut --contrast 1.5 --saturation 1.1 --dither 3
     ```
 
-5. **Convert for SwitchBot AI Canvas 13.3 inch** (portrait, 1200×1600):
+5. **Force CPU processing** (useful if GPU causes issues or is unavailable):
+
+    ```bash
+    python ConvertTo6ColorsForEInkSpectra6.py images/my_photo.jpg --cpu
+    ```
+
+    By default, the script will use GPU acceleration via [CuPy](https://cupy.dev/) if it is installed. Pass `--cpu` to force CPU-only processing with NumPy regardless of GPU availability.
+
+6. **Convert for SwitchBot AI Canvas 13.3 inch** (portrait, 1200×1600):
 
     ```bash
     python ConvertTo6ColorsForEInkSpectra6.py images/my_photo.jpg --switchbot-133
     ```
 
-6. **Convert for SwitchBot AI Canvas 13.3 inch in landscape orientation** (1600×1200):
+7. **Convert for SwitchBot AI Canvas 13.3 inch in landscape orientation** (1600×1200):
 
     ```bash
     python ConvertTo6ColorsForEInkSpectra6.py images/my_photo.jpg --switchbot-133 --dir landscape
     ```
 
-7. **Convert keeping the same size as the original image** (`--scale 1`):
+8. **Convert keeping the same size as the original image** (`--scale 1`):
 
     ```bash
     python ConvertTo6ColorsForEInkSpectra6.py images/my_photo.jpg --scale 1

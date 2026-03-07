@@ -90,7 +90,15 @@ e-inkスクリーンには独特の色制限と特性があります。このコ
     python ConvertTo6ColorsForEInkSpectra6.py images/my_photo.jpg --mode cut --contrast 1.5 --saturation 1.1 --dither 3
     ```
 
-5. **元の画像と同じサイズで変換** (`--scale 1`):
+5. **CPU処理を強制する**（GPUで問題が発生する場合や利用できない場合に便利）:
+
+    ```bash
+    python ConvertTo6ColorsForEInkSpectra6.py images/my_photo.jpg --cpu
+    ```
+
+    デフォルトでは、[CuPy](https://cupy.dev/) がインストールされている場合はGPUアクセラレーションを使用します。GPUの有無に関係なくCPUのみの処理（NumPy）を強制するには `--cpu` を指定してください。
+
+6. **元の画像と同じサイズで変換** (`--scale 1`):
 
     ```bash
     python ConvertTo6ColorsForEInkSpectra6.py images/my_photo.jpg --scale 1

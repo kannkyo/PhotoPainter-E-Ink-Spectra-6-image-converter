@@ -10,6 +10,13 @@ from tqdm import tqdm
 
 pillow_heif.register_heif_opener()
 
+# Try to import CuPy for GPU acceleration
+try:
+    import cupy as cp
+    CUPY_AVAILABLE = True
+except ImportError:
+    CUPY_AVAILABLE = False
+
 # Define the 6-color palette (black, white, yellow, red, blue, green)
 # Extracted from the putpalette call: (0,0,0, 255,255,255, 255,255,0, 255,0,0, 0,0,255, 0,255,0)
 # Using Compensated Colors R, Y, G, B
@@ -126,10 +133,25 @@ parser.add_argument('--saturation', type=float, default=1.2,
                     help='Color saturation factor (1.0 = no change)')
 parser.add_argument('--switchbot-133', action='store_true',
                     help='Preset for SwitchBot AI Canvas 13.3 inch (width=1200, height=1600; swapped when --dir is also specified)')
+parser.add_argument('--cpu', action='store_true',
+                    help='Force CPU processing even if a GPU (CuPy) is available')
 
 
 # Parse command line arguments
 args = parser.parse_args()
+
+# Determine whether to use GPU or CPU
+use_gpu = CUPY_AVAILABLE and not args.cpu
+if use_gpu:
+    xp = cp
+    print("Using GPU acceleration (CuPy)")
+elif CUPY_AVAILABLE and args.cpu:
+    xp = np
+    print("GPU available but using CPU mode (--cpu specified)")
+else:
+    xp = np
+    if not CUPY_AVAILABLE:
+        print("GPU not available (CuPy not installed). Using CPU mode.")
 
 # Detect whether --scale was explicitly provided on the command line
 _scale_explicit = any(arg == '--scale' or arg.startswith('--scale=')
