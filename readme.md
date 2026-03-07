@@ -1,5 +1,7 @@
 # E-Ink Spectra 6 Image Converter
 
+[日本語版 README はこちら](README_ja.md)
+
 This script converts images for display on a 6-color e-ink screen, optimizing them for such displays. Having bought a PhotoPainter Photo Frame (https://www.waveshare.com/PhotoPainter-B.htm) I was not so pleased with the supplied conversion script. Hence i made this version.
 
 <div style="width:30%; margin: auto;">
