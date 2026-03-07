@@ -138,14 +138,25 @@ display_dither = Image.Dither(args.dither)
 # Define function to process a single image file
 def process_image(image_file):
     try:
+        # Determine output filename and check if it can be skipped.
+        # BMP file size for a 24-bit RGB image: 54-byte header + row-aligned pixel data.
+        dither_label = 'ATK' if args.dither == 1 else 'FS' if args.dither == 3 else ''
+        output_filename = os.path.splitext(image_file)[0] + '_' + display_mode + ('_' + dither_label if dither_label else '') + '_output.bmp'
+        target_width, target_height = args.width, args.height
+        row_stride = ((target_width * 3 + 3) // 4) * 4
+        expected_size = 54 + row_stride * target_height
+        try:
+            if os.stat(output_filename).st_size == expected_size:
+                print(f'Skipping {output_filename} (already exists with same size)')
+                return
+        except OSError:
+            pass
+
         # Read input image
         input_image = Image.open(image_file)
 
         # Get the original image size
         width, height = input_image.size
-
-        # Specified target size
-        target_width, target_height = args.width, args.height
 
         if display_mode == 'scale':
             # Computed scaling
@@ -209,21 +220,6 @@ def process_image(image_file):
             quantized_image = enhanced_image.quantize(dither=display_dither, palette=pal_image).convert('RGB')
 
         # Save output image
-        # Determine dithering method label
-        dither_label = 'ATK' if args.dither == 1 else 'FS' if args.dither == 3 else ''
-        output_filename = os.path.splitext(image_file)[0] + '_' + display_mode + ('_' + dither_label if dither_label else '') + '_output.bmp'
-
-        # Skip if a file with the same name and same size already exists.
-        # BMP file size for a 24-bit RGB image: 54-byte header + row-aligned pixel data.
-        row_stride = ((target_width * 3 + 3) // 4) * 4
-        expected_size = 54 + row_stride * target_height
-        try:
-            if os.stat(output_filename).st_size == expected_size:
-                print(f'Skipping {output_filename} (already exists with same size)')
-                return
-        except OSError:
-            pass
-
         quantized_image.save(output_filename)
         print(f'Successfully converted {image_file} to {output_filename}')
     except Exception as e:
