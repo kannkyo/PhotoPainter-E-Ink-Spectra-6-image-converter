@@ -104,6 +104,15 @@ A prebuilt windows .exe is supplied. Just drag and drop image files or a folder.
     python ConvertTo6ColorsForEInkSpectra6.py images/my_photo.jpg --switchbot-133 --dir landscape
     ```
 
+7. **Convert keeping the same size as the original image** (`--scale 1`):
+
+    ```bash
+    python ConvertTo6ColorsForEInkSpectra6.py images/my_photo.jpg --scale 1
+    ```
+
+    Use `--scale` with any positive float to scale the output relative to the original image dimensions (e.g., `--scale 0.5` for half size, `--scale 2` for double size).  
+    `--scale` cannot be combined with `--width`, `--height`, or `--switchbot-133`.
+
 ## Implementation Details
 
 ### Atkinson Dithering

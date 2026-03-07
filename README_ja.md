@@ -90,6 +90,15 @@ e-inkスクリーンには独特の色制限と特性があります。このコ
     python ConvertTo6ColorsForEInkSpectra6.py images/my_photo.jpg --mode cut --contrast 1.5 --saturation 1.1 --dither 3
     ```
 
+5. **元の画像と同じサイズで変換** (`--scale 1`):
+
+    ```bash
+    python ConvertTo6ColorsForEInkSpectra6.py images/my_photo.jpg --scale 1
+    ```
+
+    `--scale` に正の浮動小数点数を指定することで、元の画像サイズを基準に出力サイズを変更できます（例: `--scale 0.5` で半分、`--scale 2` で2倍）。  
+    `--scale` は `--width`、`--height`、`--switchbot-133` と同時に使用できません。
+
 ## 実装の詳細
 
 ### アトキンソンディザリング
