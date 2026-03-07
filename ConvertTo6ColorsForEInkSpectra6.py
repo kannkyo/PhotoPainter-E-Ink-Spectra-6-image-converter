@@ -7,6 +7,11 @@ from PIL import Image, ImagePalette, ImageOps, ImageEnhance, ImageFilter
 import argparse
 import pillow_heif
 from tqdm import tqdm
+try:
+    from numba import njit as _njit
+    _NUMBA_AVAILABLE = True
+except ImportError:
+    _NUMBA_AVAILABLE = False
 
 pillow_heif.register_heif_opener()
 
@@ -56,36 +61,94 @@ def closest_palette_color(rgb):
     # Find minimum distance index
     return np.argmin(total_dist)
 
+# Numba-accelerated inner loop for Atkinson dithering.
+# The function is JIT-compiled to native machine code on first call and cached to disk,
+# so subsequent runs skip recompilation entirely.
+if _NUMBA_AVAILABLE:
+    @_njit(cache=True)
+    def _atkinson_dither_kernel(working_img, palette_array, palette_luma, height, width):
+        for y in range(height):
+            for x in range(width):
+                r = min(max(working_img[y, x, 0], 0.0), 255.0)
+                g = min(max(working_img[y, x, 1], 0.0), 255.0)
+                b = min(max(working_img[y, x, 2], 0.0), 255.0)
+                luma1 = (r * 250 + g * 350 + b * 400) / (255.0 * 1000)
+                best_idx = 0
+                best_dist = 1e18
+                for p in range(6):
+                    pr = palette_array[p, 0]
+                    pg = palette_array[p, 1]
+                    pb = palette_array[p, 2]
+                    dR = r - pr
+                    dG = g - pg
+                    dB = b - pb
+                    rgb_d = (dR*dR*0.250 + dG*dG*0.350 + dB*dB*0.400) * 0.75 / (255.0*255.0)
+                    ld = luma1 - palette_luma[p]
+                    dist = 1.5 * rgb_d + 0.60 * ld * ld
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_idx = p
+                nr = palette_array[best_idx, 0]
+                ng = palette_array[best_idx, 1]
+                nb = palette_array[best_idx, 2]
+                working_img[y, x, 0] = nr
+                working_img[y, x, 1] = ng
+                working_img[y, x, 2] = nb
+                er = (r - nr) * 0.125
+                eg = (g - ng) * 0.125
+                eb = (b - nb) * 0.125
+                if x + 1 < width:
+                    working_img[y, x + 1, 0] += er
+                    working_img[y, x + 1, 1] += eg
+                    working_img[y, x + 1, 2] += eb
+                if y + 1 < height:
+                    if x > 0:
+                        working_img[y + 1, x - 1, 0] += er
+                        working_img[y + 1, x - 1, 1] += eg
+                        working_img[y + 1, x - 1, 2] += eb
+                    working_img[y + 1, x, 0] += er * 2
+                    working_img[y + 1, x, 1] += eg * 2
+                    working_img[y + 1, x, 2] += eb * 2
+                    if x + 1 < width:
+                        working_img[y + 1, x + 1, 0] += er
+                        working_img[y + 1, x + 1, 1] += eg
+                        working_img[y + 1, x + 1, 2] += eb
+
 # Atkinson dithering implementation with floating-point error diffusion for accuracy
 def quantize_atkinson(image):
     img_array = np.array(image.convert('RGB'))
     height, width, _ = img_array.shape
     # Use float array for error diffusion to avoid integer truncation issues
     working_img = img_array.astype(np.float32)
-    
-    for y in range(height):
-        for x in range(width):
-            old_pixel = working_img[y, x].copy()
-            # Use exact color comparison instead of lookup table for better accuracy
-            idx = closest_palette_color(tuple(np.clip(old_pixel, 0, 255).astype(int)))
-            new_pixel = np.array(PALETTE_COLORS[idx], dtype=np.float32)
-            working_img[y, x] = new_pixel
-            
-            # Calculate error
-            error = old_pixel - new_pixel
-            
-            # Atkinson error distribution - only to not-yet-processed pixels (right and down)
-            # Weights: Right: 1/8, Bottom-left: 1/8, Bottom: 1/4, Bottom-right: 1/8
-            # Total distributed: 5/8, which is standard for Atkinson
-            if x + 1 < width:
-                working_img[y, x + 1] += error * (1/8)
-            if y + 1 < height:
-                if x - 1 >= 0:
-                    working_img[y + 1, x - 1] += error * (1/8)
-                working_img[y + 1, x] += error * (1/4)
+
+    if _NUMBA_AVAILABLE:
+        # Fast path: JIT-compiled native code (~100-1000x faster than pure Python loops)
+        _atkinson_dither_kernel(working_img, PALETTE_ARRAY, PALETTE_LUMA_ARRAY, height, width)
+    else:
+        # Fallback: pure Python/NumPy implementation
+        for y in range(height):
+            for x in range(width):
+                old_pixel = working_img[y, x].copy()
+                # Use exact color comparison instead of lookup table for better accuracy
+                idx = closest_palette_color(tuple(np.clip(old_pixel, 0, 255).astype(int)))
+                new_pixel = np.array(PALETTE_COLORS[idx], dtype=np.float32)
+                working_img[y, x] = new_pixel
+
+                # Calculate error
+                error = old_pixel - new_pixel
+
+                # Atkinson error distribution - only to not-yet-processed pixels (right and down)
+                # Weights: Right: 1/8, Bottom-left: 1/8, Bottom: 1/4, Bottom-right: 1/8
+                # Total distributed: 5/8, which is standard for Atkinson
                 if x + 1 < width:
-                    working_img[y + 1, x + 1] += error * (1/8)
-    
+                    working_img[y, x + 1] += error * (1/8)
+                if y + 1 < height:
+                    if x - 1 >= 0:
+                        working_img[y + 1, x - 1] += error * (1/8)
+                    working_img[y + 1, x] += error * (1/4)
+                    if x + 1 < width:
+                        working_img[y + 1, x + 1] += error * (1/8)
+
     # Clip to valid RGB range and convert back to uint8
     quantized_array = np.clip(working_img, 0, 255).astype(np.uint8)
     return Image.fromarray(quantized_array)
@@ -99,7 +162,7 @@ parser.add_argument('--dir', choices=['landscape', 'portrait'], help='Image dire
 parser.add_argument('--width', type=int, default=1200, help='Target image width in pixels (default: 1200)')
 parser.add_argument('--height', type=int, default=1600, help='Target image height in pixels (default: 1600)')
 parser.add_argument('--mode', choices=['scale', 'cut'], default='scale', help='Image conversion mode (scale or cut)')
-parser.add_argument('--dither', type=int, choices=[0, 1, 3], default=1, help='Image dithering algorithm (0 for NONE, 1 for ATKINSON (slow), 3 for FLOYDSTEINBERG)')
+parser.add_argument('--dither', type=int, choices=[0, 1, 3], default=1, help='Image dithering algorithm (0 for NONE, 1 for ATKINSON, 3 for FLOYDSTEINBERG)')
 # Add enhancement arguments
 parser.add_argument('--brightness', type=float, default=1.1, help='Brightness factor (1.0 = no change)')
 parser.add_argument('--contrast', type=float, default=1.2, help='Contrast factor (1.0 = no change)')
@@ -127,7 +190,10 @@ if args.height <= 0:
 if args.dither == 3:  # Floyd-Steinberg
     print("Using Floyd-Steinberg dithering. Note: dither option 1 (Atkinson) can be used for better visual results")
 elif args.dither == 1:  # Atkinson
-    print("Using Atkinson dithering. Note: dither option 3 (Floyd-Steinberg) is 80x faster but gives less visual quality")
+    if _NUMBA_AVAILABLE:
+        print("Using Atkinson dithering (Numba-accelerated).")
+    else:
+        print("Using Atkinson dithering. Install 'numba' for a significant speed boost. Note: dither option 3 (Floyd-Steinberg) is faster but gives less visual quality")
 
 # Get input parameters
 input_paths = args.input_paths
