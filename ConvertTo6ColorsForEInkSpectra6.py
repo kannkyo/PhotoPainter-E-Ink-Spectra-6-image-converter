@@ -96,8 +96,9 @@ parser = argparse.ArgumentParser(description='Process some images.')
 # Add orientation parameter
 parser.add_argument('input_paths', nargs='+', type=str, help='Input image file(s) or directory')
 parser.add_argument('--dir', choices=['landscape', 'portrait'], help='Image direction (landscape or portrait)')
-parser.add_argument('--width', type=int, default=1200, help='Target image width in pixels (default: 1200)')
-parser.add_argument('--height', type=int, default=1600, help='Target image height in pixels (default: 1600)')
+parser.add_argument('--width', type=int, default=None, help='Target image width in pixels (default: 1200). Cannot be used with --scale')
+parser.add_argument('--height', type=int, default=None, help='Target image height in pixels (default: 1600). Cannot be used with --scale')
+parser.add_argument('--scale', type=float, default=None, help='Scale factor for output image size relative to the original (e.g., 1.0 = same size as original). Cannot be used with --width or --height')
 parser.add_argument('--mode', choices=['scale', 'cut'], default='scale', help='Image conversion mode (scale or cut)')
 parser.add_argument('--dither', type=int, choices=[0, 1, 3], default=1, help='Image dithering algorithm (0 for NONE, 1 for ATKINSON (slow), 3 for FLOYDSTEINBERG)')
 # Add enhancement arguments
@@ -110,6 +111,15 @@ parser.add_argument('--switchbot-133', action='store_true', help='Preset for Swi
 # Parse command line arguments
 args = parser.parse_args()
 
+# Validate --scale is not combined with --width, --height, or --switchbot-133
+if args.scale is not None:
+    if args.width is not None or args.height is not None:
+        parser.error('--scale cannot be used together with --width or --height')
+    if args.switchbot_133:
+        parser.error('--scale cannot be used together with --switchbot-133')
+    if args.scale <= 0:
+        parser.error('--scale must be a positive number')
+
 # Apply --switchbot-133 preset (width=1200, height=1600; swap if --dir is specified)
 if args.switchbot_133:
     args.width = 1200
@@ -117,11 +127,19 @@ if args.switchbot_133:
     if args.dir == 'landscape':
         args.width, args.height = args.height, args.width
 
+# Apply default width/height when --scale is not used
+if args.scale is None:
+    if args.width is None:
+        args.width = 1200
+    if args.height is None:
+        args.height = 1600
+
 # Validate --width and --height
-if args.width <= 0:
-    parser.error('--width must be a positive integer')
-if args.height <= 0:
-    parser.error('--height must be a positive integer')
+if args.scale is None:
+    if args.width <= 0:
+        parser.error('--width must be a positive integer')
+    if args.height <= 0:
+        parser.error('--height must be a positive integer')
 
 # Add comments about dithering options
 if args.dither == 3:  # Floyd-Steinberg
@@ -145,7 +163,11 @@ def process_image(image_file):
         width, height = input_image.size
 
         # Specified target size
-        target_width, target_height = args.width, args.height
+        if args.scale is not None:
+            target_width = max(1, int(width * args.scale))
+            target_height = max(1, int(height * args.scale))
+        else:
+            target_width, target_height = args.width, args.height
 
         if display_mode == 'scale':
             # Computed scaling
