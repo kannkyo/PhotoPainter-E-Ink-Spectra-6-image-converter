@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "photopainter-eink-spectra6-converter"
+version = "1.0.0"
+description = "Image converter for the Waveshare 7.3-inch E-Ink Spectra 6 display"
+readme = "readme.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+dependencies = [
+    "Pillow",
+    "pillow-heif",
+    "scikit-image",
+    "tqdm",
+    "numpy",
+]
+
+[project.scripts]
+convert-eink = "ConvertTo6ColorsForEInkSpectra6:main"
+
+[tool.hatch.build.targets.wheel]
+include = ["ConvertTo6ColorsForEInkSpectra6.py"]

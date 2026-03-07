@@ -55,6 +55,35 @@ This script is a combination and enhancement of two existing scripts found in /i
 
 A prebuilt windows .exe is supplied. Just drag and drop image files or a folder.
 
+### Installation with uv (recommended)
+
+[uv](https://docs.astral.sh/uv/) is a fast Python package manager. Install it first if you haven't:
+
+```bash
+pip install uv
+```
+
+Then install the converter and its dependencies:
+
+```bash
+uv sync
+```
+
+After syncing, run the converter with:
+
+```bash
+uv run convert-eink path/to/your/image.jpg
+```
+
+Or install it as a global tool:
+
+```bash
+uv tool install .
+convert-eink path/to/your/image.jpg
+```
+
+### Installation with pip
+
 1.  **Install Dependencies**:
     ```bash
     pip install -r requirements.txt
