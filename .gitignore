@@ -6,4 +6,3 @@ build/
 venv/
 dist/
 build/
-*_output.bmp

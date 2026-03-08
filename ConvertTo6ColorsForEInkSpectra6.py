@@ -1,9 +1,7 @@
 # encoding: utf-8
 
 import sys
-import os
 import os.path
-import concurrent.futures
 import numpy as np
 from PIL import Image, ImagePalette, ImageOps, ImageEnhance, ImageFilter
 import argparse
@@ -128,8 +126,6 @@ parser.add_argument('--saturation', type=float, default=1.2,
                     help='Color saturation factor (1.0 = no change)')
 parser.add_argument('--switchbot-133', action='store_true',
                     help='Preset for SwitchBot AI Canvas 13.3 inch (width=1200, height=1600; swapped when --dir is also specified)')
-parser.add_argument('--workers', type=int, default=os.cpu_count(),
-                    help='Number of parallel worker threads (default: number of CPU cores)')
 
 
 # Parse command line arguments
@@ -326,7 +322,5 @@ if not all_image_files:
     sys.exit(1)
 
 print(f'Found {len(all_image_files)} image files to process')
-with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
-    futures = {executor.submit(process_image, f): f for f in all_image_files}
-    for _ in tqdm(concurrent.futures.as_completed(futures), total=len(all_image_files), desc="Processing images", unit="file"):
-        pass
+for image_file in tqdm(all_image_files, desc="Processing images", unit="file"):
+    process_image(image_file)
