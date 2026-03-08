@@ -10,6 +10,13 @@ from tqdm import tqdm
 
 pillow_heif.register_heif_opener()
 
+# Try to import CuPy for optional NVIDIA GPU acceleration
+try:
+    import cupy as cp
+    _cupy_available = True
+except ImportError:
+    _cupy_available = False
+
 # Define the 6-color palette (black, white, yellow, red, blue, green)
 # Extracted from the putpalette call: (0,0,0, 255,255,255, 255,255,0, 255,0,0, 0,0,255, 0,255,0)
 # Using Compensated Colors R, Y, G, B
@@ -31,6 +38,164 @@ PALETTE_ARRAY = np.array(PALETTE_COLORS, dtype=np.float32)
 # blue and green prints darker, lower its luma value so the distance metric favors it over white, also at luma1
 PALETTE_LUMA_ARRAY = np.array(
     [r*250 + g*350 + b*400 for (r, g, b) in PALETTE_COLORS], dtype=np.float32) / (255.0 * 1000)
+
+# Palette lookup table (LUT) step and size for GPU-accelerated Atkinson dithering.
+# Step of 2 means each channel is quantized to 128 levels; the resulting LUT is 128^3 ≈ 2M entries (2 MB).
+# This introduces at most a 1-unit rounding error per channel, which is imperceptible on a 6-color palette.
+_LUT_STEP = 2
+_LUT_SIZE = 256 // _LUT_STEP
+
+
+def _build_palette_lut(xp=np):
+    """Build a palette lookup table mapping quantized (R, G, B) → palette index.
+
+    The table is computed using *xp* (either numpy for CPU or cupy for GPU) so
+    that the distance calculations run in parallel on the selected device.  The
+    result is always returned as a compact NumPy uint8 array of shape
+    (_LUT_SIZE, _LUT_SIZE, _LUT_SIZE) for fast CPU-side lookup during
+    sequential dithering.
+
+    Args:
+        xp: array module to use for computation (numpy or cupy).
+
+    Returns:
+        NumPy uint8 array of shape (_LUT_SIZE, _LUT_SIZE, _LUT_SIZE).
+    """
+    steps = np.arange(_LUT_SIZE, dtype=np.float32) * _LUT_STEP
+    r_vals, g_vals, b_vals = np.meshgrid(steps, steps, steps, indexing='ij')
+    all_colors = np.stack(
+        [r_vals.ravel(), g_vals.ravel(), b_vals.ravel()], axis=1)  # (N, 3)
+
+    all_colors_dev = xp.array(all_colors, dtype=xp.float32)
+    palette_dev = xp.array(PALETTE_COLORS, dtype=xp.float32)          # (6, 3)
+    palette_luma_dev = xp.array(PALETTE_LUMA_ARRAY, dtype=xp.float32)  # (6,)
+
+    r1 = all_colors_dev[:, 0:1]  # (N, 1)
+    g1 = all_colors_dev[:, 1:2]
+    b1 = all_colors_dev[:, 2:3]
+
+    luma1 = (r1 * 250 + g1 * 350 + b1 * 400) / (255.0 * 1000)  # (N, 1)
+
+    # Broadcast (N, 1) − (6,) → (N, 6)
+    diffR = r1 - palette_dev[:, 0]
+    diffG = g1 - palette_dev[:, 1]
+    diffB = b1 - palette_dev[:, 2]
+
+    rgb_dist = (diffR * diffR * 0.250 + diffG * diffG * 0.350 +
+                diffB * diffB * 0.400) * 0.75 / (255.0 * 255.0)
+
+    luma_diff = luma1 - palette_luma_dev  # (N, 1) − (6,) → (N, 6)
+    luma_dist = luma_diff * luma_diff
+
+    total_dist = 1.5 * rgb_dist + 0.60 * luma_dist
+    indices_dev = xp.argmin(total_dist, axis=1)  # (N,)
+
+    if xp is not np:
+        indices_cpu = xp.asnumpy(indices_dev)
+    else:
+        indices_cpu = np.asarray(indices_dev)
+
+    return indices_cpu.reshape(_LUT_SIZE, _LUT_SIZE, _LUT_SIZE).astype(np.uint8)
+
+
+def quantize_atkinson_lut(image, lut):
+    """Atkinson dithering that uses a precomputed palette LUT for O(1) color lookup.
+
+    This is functionally equivalent to :func:`quantize_atkinson` but replaces
+    the per-pixel NumPy distance computation with a single array index into the
+    precomputed LUT, giving a significant speed-up especially when the LUT was
+    built on a GPU.
+
+    Args:
+        image: PIL Image to quantize.
+        lut: uint8 NumPy array of shape (_LUT_SIZE, _LUT_SIZE, _LUT_SIZE).
+
+    Returns:
+        PIL Image quantized to the 6-color palette.
+    """
+    img_array = np.array(image.convert('RGB'))
+    height, width, _ = img_array.shape
+    working_img = img_array.astype(np.float32)
+
+    for y in range(height):
+        for x in range(width):
+            old_pixel = working_img[y, x].copy()
+            clipped = np.clip(old_pixel, 0, 255)
+
+            ri = int(clipped[0]) // _LUT_STEP
+            gi = int(clipped[1]) // _LUT_STEP
+            bi = int(clipped[2]) // _LUT_STEP
+            idx = lut[ri, gi, bi]
+
+            new_pixel = np.array(PALETTE_COLORS[idx], dtype=np.float32)
+            working_img[y, x] = new_pixel
+
+            error = old_pixel - new_pixel
+
+            if x + 1 < width:
+                working_img[y, x + 1] += error * (1 / 8)
+            if y + 1 < height:
+                if x - 1 >= 0:
+                    working_img[y + 1, x - 1] += error * (1 / 8)
+                working_img[y + 1, x] += error * (1 / 4)
+                if x + 1 < width:
+                    working_img[y + 1, x + 1] += error * (1 / 8)
+
+    quantized_array = np.clip(working_img, 0, 255).astype(np.uint8)
+    return Image.fromarray(quantized_array)
+
+
+def quantize_image_gpu(image, xp):
+    """Fully GPU-vectorized color quantization without dithering.
+
+    Moves the entire image to the GPU, computes the closest palette color for
+    every pixel in parallel, and returns the quantized image.  This replaces
+    the Pillow ``quantize(dither=NONE)`` path when ``--gpu`` is active.
+
+    Args:
+        image: PIL Image to quantize.
+        xp: cupy (or numpy as fallback) array module.
+
+    Returns:
+        PIL Image quantized to the 6-color palette.
+    """
+    img_array = np.array(image.convert('RGB'))
+    height, width, _ = img_array.shape
+    flat = img_array.reshape(-1, 3).astype(np.float32)
+
+    flat_dev = xp.array(flat)
+    palette_dev = xp.array(PALETTE_COLORS, dtype=xp.float32)           # (6, 3)
+    palette_luma_dev = xp.array(PALETTE_LUMA_ARRAY, dtype=xp.float32)  # (6,)
+
+    r1 = flat_dev[:, 0:1]
+    g1 = flat_dev[:, 1:2]
+    b1 = flat_dev[:, 2:3]
+
+    luma1 = (r1 * 250 + g1 * 350 + b1 * 400) / (255.0 * 1000)
+
+    diffR = r1 - palette_dev[:, 0]
+    diffG = g1 - palette_dev[:, 1]
+    diffB = b1 - palette_dev[:, 2]
+
+    rgb_dist = (diffR * diffR * 0.250 + diffG * diffG * 0.350 +
+                diffB * diffB * 0.400) * 0.75 / (255.0 * 255.0)
+
+    luma_diff = luma1 - palette_luma_dev
+    luma_dist = luma_diff * luma_diff
+
+    total_dist = 1.5 * rgb_dist + 0.60 * luma_dist
+    indices_dev = xp.argmin(total_dist, axis=1)  # (N,)
+
+    palette_colors_dev = xp.array(PALETTE_COLORS, dtype=xp.uint8)
+    quantized_dev = palette_colors_dev[indices_dev]  # (N, 3)
+
+    if xp is not np:
+        quantized_cpu = xp.asnumpy(quantized_dev)
+    else:
+        quantized_cpu = np.asarray(quantized_dev)
+
+    return Image.fromarray(quantized_cpu.reshape(height, width, 3))
+
 
 # Find the closest palette color using floating-point arithmetic (exact RGBL method)
 
@@ -126,6 +291,8 @@ parser.add_argument('--saturation', type=float, default=1.2,
                     help='Color saturation factor (1.0 = no change)')
 parser.add_argument('--switchbot-133', action='store_true',
                     help='Preset for SwitchBot AI Canvas 13.3 inch (width=1200, height=1600; swapped when --dir is also specified)')
+parser.add_argument('--gpu', action='store_true',
+                    help='Enable NVIDIA GPU acceleration via CuPy (requires cupy-cuda12x or similar CuPy package)')
 
 
 # Parse command line arguments
@@ -166,6 +333,25 @@ if args.dither == 3:  # Floyd-Steinberg
     print("Using Floyd-Steinberg dithering. Note: dither option 1 (Atkinson) can be used for better visual results")
 elif args.dither == 1:  # Atkinson
     print("Using Atkinson dithering. Note: dither option 3 (Floyd-Steinberg) is 80x faster but gives less visual quality")
+
+# Set up GPU acceleration
+_xp = np  # default array module: NumPy (CPU)
+_palette_lut = None  # precomputed palette LUT (used with Atkinson dithering)
+
+if args.gpu:
+    if _cupy_available:
+        _xp = cp
+        print("GPU acceleration enabled (CuPy detected).")
+    else:
+        print("Warning: --gpu specified but CuPy is not installed. "
+              "Install it with: pip install cupy-cuda12x  (adjust suffix to match your CUDA version). "
+              "Falling back to CPU.")
+
+if args.dither == 1:  # Atkinson – build LUT regardless of GPU flag (GPU just makes it faster to build)
+    device_label = "GPU" if _xp is not np else "CPU"
+    print(f"Building palette lookup table on {device_label}...")
+    _palette_lut = _build_palette_lut(_xp)
+    print("Palette lookup table ready.")
 
 # Get input parameters
 input_paths = args.input_paths
@@ -270,7 +456,12 @@ def process_image(image_file):
 
         # The color quantization and dithering algorithms are performed, and the results are converted to RGB mode
         if args.dither == 1:  # Atkinson dithering
-            quantized_image = quantize_atkinson(enhanced_image).convert('RGB')
+            if _palette_lut is not None:
+                quantized_image = quantize_atkinson_lut(enhanced_image, _palette_lut).convert('RGB')
+            else:
+                quantized_image = quantize_atkinson(enhanced_image).convert('RGB')
+        elif _xp is not np and args.dither == 0:  # NONE dithering on GPU
+            quantized_image = quantize_image_gpu(enhanced_image, _xp).convert('RGB')
         else:
             quantized_image = enhanced_image.quantize(
                 dither=display_dither, palette=pal_image).convert('RGB')

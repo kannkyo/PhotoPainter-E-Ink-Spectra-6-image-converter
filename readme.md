@@ -22,6 +22,7 @@ E-ink screens have unique color limitations and characteristics. This converter 
 * **Image Enhancements**: Applying adjustments like brightness, contrast, and saturation to make the image appear more vibrant and clear on the e-ink display. Adjusted the relative contribution of rgb_dist vs luma_dist, so that hue errors are more important. Also tuned the Weight compensation in distance metric.
 * **HEIC Support**: Enabling the processing of HEIC image files.
 * **Progress Bar**: for folder processing, especially handy for large numbers of files.
+* **NVIDIA GPU Acceleration**: Optional GPU acceleration via CuPy. Pass `--gpu` to enable. Speeds up palette lookup table construction and (when `--dither 0`) the full colour-quantisation step.
 
 ## Comparison
 
@@ -74,6 +75,21 @@ A prebuilt windows .exe is supplied. Just drag and drop image files or a folder.
     pip install -r requirements.txt
     ```
 
+    For NVIDIA GPU acceleration, also install CuPy (choose the package that matches your CUDA version):
+
+    ```bash
+    # CUDA 12.x
+    pip install cupy-cuda12x
+    # CUDA 11.x
+    pip install cupy-cuda11x
+    ```
+
+    Or with the optional dependency group:
+
+    ```bash
+    pip install ".[gpu]"
+    ```
+
 2. **Convert a single image**:
 
     ```bash
@@ -112,6 +128,17 @@ A prebuilt windows .exe is supplied. Just drag and drop image files or a folder.
 
     Use `--scale` with any positive float to scale the output relative to the original image dimensions (e.g., `--scale 0.5` for half size, `--scale 2` for double size).  
     `--scale` cannot be combined with `--width`, `--height`, or `--switchbot-133`.
+
+8. **Use NVIDIA GPU acceleration** (`--gpu`):
+
+    ```bash
+    python ConvertTo6ColorsForEInkSpectra6.py images/my_photo.jpg --gpu
+    ```
+
+    Requires CuPy to be installed (see step 1). When enabled:
+    * The palette lookup table for Atkinson dithering is built on the GPU, making construction faster.
+    * When `--dither 0` (NONE) is selected, the entire colour-quantisation step runs on the GPU in a single vectorised pass.
+    * If CuPy is not available a warning is printed and the script falls back to CPU processing.
 
 ## Implementation Details
 

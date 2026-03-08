@@ -11,3 +11,9 @@ name = "E-Ink Spectra 6 Image Converter"
 readme = "README.md"
 requires-python = ">=3.10"
 version = "0.1.0"
+
+[project.optional-dependencies]
+# Install one of the cupy-* packages that matches your installed CUDA version.
+# Examples: cupy-cuda11x (CUDA 11), cupy-cuda12x (CUDA 12).
+# See https://docs.cupy.dev/en/stable/install.html for details.
+gpu = ["cupy-cuda12x>=13.0.0"]
