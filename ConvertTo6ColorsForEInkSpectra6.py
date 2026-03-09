@@ -33,86 +33,43 @@ PALETTE_COLORS = [
 #                   Black          White         Yellow        Red           Blue          Green
 # PALETTE_COLORS = [(0, 0, 0), (255, 255, 255), (240, 224, 80), (160, 32, 32), (80, 128, 184), (96, 128, 80)]
 
-# Precompute palette as NumPy arrays for faster access
-PALETTE_ARRAY = np.array(PALETTE_COLORS, dtype=np.float32)
+# Precompute palette luma for faster access
 # blue and green prints darker, lower its luma value so the distance metric favors it over white, also at luma1
 PALETTE_LUMA_ARRAY = np.array(
     [r*250 + g*350 + b*400 for (r, g, b) in PALETTE_COLORS], dtype=np.float32) / (255.0 * 1000)
 
-# Palette lookup table (LUT) step and size for GPU-accelerated Atkinson dithering.
-# Step of 2 means each channel is quantized to 128 levels; the resulting LUT is 128^3 ≈ 2M entries (2 MB).
-# This introduces at most a 1-unit rounding error per channel, which is imperceptible on a 6-color palette.
+# Palette LUT: step of 2 → 128³ ≈ 2 MB; at most 1-unit rounding error per channel (imperceptible on a 6-colour palette).
 _LUT_STEP = 2
 _LUT_SIZE = 256 // _LUT_STEP
 
 
+def _to_numpy(xp, arr):
+    """Return arr as a NumPy array (works for both NumPy and CuPy)."""
+    return xp.asnumpy(arr) if xp is not np else np.asarray(arr)
+
+
+def _palette_indices(xp, pixels):
+    """Return palette index for each pixel in an (N, 3) float32 array."""
+    p = xp.array(PALETTE_COLORS, dtype=xp.float32)
+    pl = xp.array(PALETTE_LUMA_ARRAY, dtype=xp.float32)
+    r, g, b = pixels[:, 0:1], pixels[:, 1:2], pixels[:, 2:3]
+    luma = (r * 250 + g * 350 + b * 400) / (255.0 * 1000)
+    dr, dg, db = r - p[:, 0], g - p[:, 1], b - p[:, 2]
+    rgb_dist = (dr*dr*0.250 + dg*dg*0.350 + db*db*0.400) * 0.75 / (255.0*255.0)
+    dl = luma - pl
+    return xp.argmin(1.5 * rgb_dist + 0.60 * dl * dl, axis=1)
+
+
 def _build_palette_lut(xp=np):
-    """Build a palette lookup table mapping quantized (R, G, B) → palette index.
-
-    The table is computed using *xp* (either numpy for CPU or cupy for GPU) so
-    that the distance calculations run in parallel on the selected device.  The
-    result is always returned as a compact NumPy uint8 array of shape
-    (_LUT_SIZE, _LUT_SIZE, _LUT_SIZE) for fast CPU-side lookup during
-    sequential dithering.
-
-    Args:
-        xp: array module to use for computation (numpy or cupy).
-
-    Returns:
-        NumPy uint8 array of shape (_LUT_SIZE, _LUT_SIZE, _LUT_SIZE).
-    """
+    """Build (128, 128, 128) uint8 LUT mapping quantised RGB → palette index."""
     steps = np.arange(_LUT_SIZE, dtype=np.float32) * _LUT_STEP
-    r_vals, g_vals, b_vals = np.meshgrid(steps, steps, steps, indexing='ij')
-    all_colors = np.stack(
-        [r_vals.ravel(), g_vals.ravel(), b_vals.ravel()], axis=1)  # (N, 3)
-
-    all_colors_dev = xp.array(all_colors, dtype=xp.float32)
-    palette_dev = xp.array(PALETTE_COLORS, dtype=xp.float32)          # (6, 3)
-    palette_luma_dev = xp.array(PALETTE_LUMA_ARRAY, dtype=xp.float32)  # (6,)
-
-    r1 = all_colors_dev[:, 0:1]  # (N, 1)
-    g1 = all_colors_dev[:, 1:2]
-    b1 = all_colors_dev[:, 2:3]
-
-    luma1 = (r1 * 250 + g1 * 350 + b1 * 400) / (255.0 * 1000)  # (N, 1)
-
-    # Broadcast (N, 1) − (6,) → (N, 6)
-    diffR = r1 - palette_dev[:, 0]
-    diffG = g1 - palette_dev[:, 1]
-    diffB = b1 - palette_dev[:, 2]
-
-    rgb_dist = (diffR * diffR * 0.250 + diffG * diffG * 0.350 +
-                diffB * diffB * 0.400) * 0.75 / (255.0 * 255.0)
-
-    luma_diff = luma1 - palette_luma_dev  # (N, 1) − (6,) → (N, 6)
-    luma_dist = luma_diff * luma_diff
-
-    total_dist = 1.5 * rgb_dist + 0.60 * luma_dist
-    indices_dev = xp.argmin(total_dist, axis=1)  # (N,)
-
-    if xp is not np:
-        indices_cpu = xp.asnumpy(indices_dev)
-    else:
-        indices_cpu = np.asarray(indices_dev)
-
-    return indices_cpu.reshape(_LUT_SIZE, _LUT_SIZE, _LUT_SIZE).astype(np.uint8)
+    r, g, b = np.meshgrid(steps, steps, steps, indexing='ij')
+    pixels = xp.array(np.stack([r.ravel(), g.ravel(), b.ravel()], axis=1), dtype=xp.float32)
+    return _to_numpy(xp, _palette_indices(xp, pixels)).reshape(_LUT_SIZE, _LUT_SIZE, _LUT_SIZE).astype(np.uint8)
 
 
 def quantize_atkinson_lut(image, lut):
-    """Atkinson dithering that uses a precomputed palette LUT for O(1) color lookup.
-
-    This is functionally equivalent to :func:`quantize_atkinson` but replaces
-    the per-pixel NumPy distance computation with a single array index into the
-    precomputed LUT, giving a significant speed-up especially when the LUT was
-    built on a GPU.
-
-    Args:
-        image: PIL Image to quantize.
-        lut: uint8 NumPy array of shape (_LUT_SIZE, _LUT_SIZE, _LUT_SIZE).
-
-    Returns:
-        PIL Image quantized to the 6-color palette.
-    """
+    """Atkinson dithering with O(1) palette lookup via precomputed LUT."""
     img_array = np.array(image.convert('RGB'))
     height, width, _ = img_array.shape
     working_img = img_array.astype(np.float32)
@@ -120,13 +77,8 @@ def quantize_atkinson_lut(image, lut):
     for y in range(height):
         for x in range(width):
             old_pixel = working_img[y, x].copy()
-            clipped = np.clip(old_pixel, 0, 255)
-
-            ri = int(clipped[0]) // _LUT_STEP
-            gi = int(clipped[1]) // _LUT_STEP
-            bi = int(clipped[2]) // _LUT_STEP
-            idx = lut[ri, gi, bi]
-
+            c = np.clip(old_pixel, 0, 255)
+            idx = lut[int(c[0]) // _LUT_STEP, int(c[1]) // _LUT_STEP, int(c[2]) // _LUT_STEP]
             new_pixel = np.array(PALETTE_COLORS[idx], dtype=np.float32)
             working_img[y, x] = new_pixel
 
@@ -141,127 +93,17 @@ def quantize_atkinson_lut(image, lut):
                 if x + 1 < width:
                     working_img[y + 1, x + 1] += error * (1 / 8)
 
-    quantized_array = np.clip(working_img, 0, 255).astype(np.uint8)
-    return Image.fromarray(quantized_array)
+    return Image.fromarray(np.clip(working_img, 0, 255).astype(np.uint8))
 
 
 def quantize_image_gpu(image, xp):
-    """Fully GPU-vectorized color quantization without dithering.
-
-    Moves the entire image to the GPU, computes the closest palette color for
-    every pixel in parallel, and returns the quantized image.  This replaces
-    the Pillow ``quantize(dither=NONE)`` path when ``--gpu`` is active.
-
-    Args:
-        image: PIL Image to quantize.
-        xp: cupy (or numpy as fallback) array module.
-
-    Returns:
-        PIL Image quantized to the 6-color palette.
-    """
-    img_array = np.array(image.convert('RGB'))
-    height, width, _ = img_array.shape
-    flat = img_array.reshape(-1, 3).astype(np.float32)
-
-    flat_dev = xp.array(flat)
-    palette_dev = xp.array(PALETTE_COLORS, dtype=xp.float32)           # (6, 3)
-    palette_luma_dev = xp.array(PALETTE_LUMA_ARRAY, dtype=xp.float32)  # (6,)
-
-    r1 = flat_dev[:, 0:1]
-    g1 = flat_dev[:, 1:2]
-    b1 = flat_dev[:, 2:3]
-
-    luma1 = (r1 * 250 + g1 * 350 + b1 * 400) / (255.0 * 1000)
-
-    diffR = r1 - palette_dev[:, 0]
-    diffG = g1 - palette_dev[:, 1]
-    diffB = b1 - palette_dev[:, 2]
-
-    rgb_dist = (diffR * diffR * 0.250 + diffG * diffG * 0.350 +
-                diffB * diffB * 0.400) * 0.75 / (255.0 * 255.0)
-
-    luma_diff = luma1 - palette_luma_dev
-    luma_dist = luma_diff * luma_diff
-
-    total_dist = 1.5 * rgb_dist + 0.60 * luma_dist
-    indices_dev = xp.argmin(total_dist, axis=1)  # (N,)
-
-    palette_colors_dev = xp.array(PALETTE_COLORS, dtype=xp.uint8)
-    quantized_dev = palette_colors_dev[indices_dev]  # (N, 3)
-
-    if xp is not np:
-        quantized_cpu = xp.asnumpy(quantized_dev)
-    else:
-        quantized_cpu = np.asarray(quantized_dev)
-
-    return Image.fromarray(quantized_cpu.reshape(height, width, 3))
-
-
-# Find the closest palette color using floating-point arithmetic (exact RGBL method)
-
-
-def closest_palette_color(rgb):
-    r1, g1, b1 = rgb
-    # Calculate luma for the input pixel
-    luma1 = (r1 * 250 + g1 * 350 + b1 * 400) / (255.0 * 1000)
-
-    # Calculate differences using precomputed arrays
-    diffR = r1 - PALETTE_ARRAY[:, 0]
-    diffG = g1 - PALETTE_ARRAY[:, 1]
-    diffB = b1 - PALETTE_ARRAY[:, 2]
-
-    # Calculate RGB component of distance
-    # boost blue, reduce green a bit and red a little more to compensate for human eye sensitivity and e-ink display characteristics (trial and error)
-    rgb_dist = (diffR*diffR*0.250 + diffG*diffG*0.350 +
-                diffB*diffB*0.400) * 0.75 / (255.0*255.0)
-
-    # Calculate luma differences
-    luma_diff = luma1 - PALETTE_LUMA_ARRAY
-    luma_dist = luma_diff * luma_diff
-
-    # Total distance
-    # hue errors are more important, increased the rgb_dist factor.
-    total_dist = 1.5*rgb_dist + 0.60*luma_dist
-
-    # Find minimum distance index
-    return np.argmin(total_dist)
-
-# Atkinson dithering implementation with floating-point error diffusion for accuracy
-
-
-def quantize_atkinson(image):
-    img_array = np.array(image.convert('RGB'))
-    height, width, _ = img_array.shape
-    # Use float array for error diffusion to avoid integer truncation issues
-    working_img = img_array.astype(np.float32)
-
-    for y in range(height):
-        for x in range(width):
-            old_pixel = working_img[y, x].copy()
-            # Use exact color comparison instead of lookup table for better accuracy
-            idx = closest_palette_color(
-                tuple(np.clip(old_pixel, 0, 255).astype(int)))
-            new_pixel = np.array(PALETTE_COLORS[idx], dtype=np.float32)
-            working_img[y, x] = new_pixel
-
-            # Calculate error
-            error = old_pixel - new_pixel
-
-            # Atkinson error distribution - only to not-yet-processed pixels (right and down)
-            # Weights: Right: 1/8, Bottom-left: 1/8, Bottom: 1/4, Bottom-right: 1/8
-            # Total distributed: 5/8, which is standard for Atkinson
-            if x + 1 < width:
-                working_img[y, x + 1] += error * (1/8)
-            if y + 1 < height:
-                if x - 1 >= 0:
-                    working_img[y + 1, x - 1] += error * (1/8)
-                working_img[y + 1, x] += error * (1/4)
-                if x + 1 < width:
-                    working_img[y + 1, x + 1] += error * (1/8)
-
-    # Clip to valid RGB range and convert back to uint8
-    quantized_array = np.clip(working_img, 0, 255).astype(np.uint8)
-    return Image.fromarray(quantized_array)
+    """Vectorised (no-dither) palette quantisation using xp (NumPy or CuPy)."""
+    img = np.array(image.convert('RGB'))
+    h, w, _ = img.shape
+    pixels = xp.array(img.reshape(-1, 3), dtype=xp.float32)
+    indices = _to_numpy(xp, _palette_indices(xp, pixels))
+    palette = np.array(PALETTE_COLORS, dtype=np.uint8)
+    return Image.fromarray(palette[indices].reshape(h, w, 3))
 
 
 # Create an ArgumentParser object
@@ -456,10 +298,7 @@ def process_image(image_file):
 
         # The color quantization and dithering algorithms are performed, and the results are converted to RGB mode
         if args.dither == 1:  # Atkinson dithering
-            if _palette_lut is not None:
-                quantized_image = quantize_atkinson_lut(enhanced_image, _palette_lut).convert('RGB')
-            else:
-                quantized_image = quantize_atkinson(enhanced_image).convert('RGB')
+            quantized_image = quantize_atkinson_lut(enhanced_image, _palette_lut).convert('RGB')
         elif _xp is not np and args.dither == 0:  # NONE dithering on GPU
             quantized_image = quantize_image_gpu(enhanced_image, _xp).convert('RGB')
         else:
