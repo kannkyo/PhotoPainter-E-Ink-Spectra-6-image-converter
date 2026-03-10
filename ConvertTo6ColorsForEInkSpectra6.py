@@ -1,11 +1,13 @@
 # encoding: utf-8
 
-import sys
-import os.path
-import numpy as np
-from PIL import Image, ImagePalette, ImageOps, ImageEnhance, ImageFilter
 import argparse
+import multiprocessing as mp
+import os.path
+import sys
+
+import numpy as np
 import pillow_heif
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImagePalette
 from tqdm import tqdm
 
 pillow_heif.register_heif_opener()
@@ -99,90 +101,13 @@ def quantize_atkinson(image):
     return Image.fromarray(quantized_array)
 
 
-# Create an ArgumentParser object
-parser = argparse.ArgumentParser(description='Process some images.')
-
-# Add orientation parameter
-parser.add_argument('input_paths', nargs='+', type=str,
-                    help='Input image file(s) or directory')
-parser.add_argument('--dir', choices=['landscape', 'portrait'],
-                    help='Image direction (landscape or portrait)')
-parser.add_argument('--width', type=int, default=None,
-                    help='Target image width in pixels. Cannot be used with --scale')
-parser.add_argument('--height', type=int, default=None,
-                    help='Target image height in pixels. Cannot be used with --scale')
-parser.add_argument('--scale', type=float, default=1.0,
-                    help='Scale factor for output image size relative to the original (e.g., 1.0 = same size as original). Cannot be used with --width or --height (default: 1.0)')
-parser.add_argument('--mode', choices=['scale', 'cut'],
-                    default='scale', help='Image conversion mode (scale or cut)')
-parser.add_argument('--dither', type=int, choices=[0, 1, 3], default=1,
-                    help='Image dithering algorithm (0 for NONE, 1 for ATKINSON (slow), 3 for FLOYDSTEINBERG)')
-# Add enhancement arguments
-parser.add_argument('--brightness', type=float, default=1.1,
-                    help='Brightness factor (1.0 = no change)')
-parser.add_argument('--contrast', type=float, default=1.2,
-                    help='Contrast factor (1.0 = no change)')
-parser.add_argument('--saturation', type=float, default=1.2,
-                    help='Color saturation factor (1.0 = no change)')
-parser.add_argument('--switchbot-133', action='store_true',
-                    help='Preset for SwitchBot AI Canvas 13.3 inch (width=1200, height=1600; swapped when --dir is also specified)')
-
-
-# Parse command line arguments
-args = parser.parse_args()
-
-# Detect whether --scale was explicitly provided on the command line
-_scale_explicit = any(arg == '--scale' or arg.startswith('--scale=')
-                      for arg in sys.argv)
-
-# Validate --scale value is positive
-if args.scale <= 0:
-    parser.error('--scale must be a positive number')
-
-# Validate --scale is not combined with --width, --height, or --switchbot-133
-if _scale_explicit:
-    if args.width is not None or args.height is not None:
-        parser.error(
-            '--scale cannot be used together with --width or --height')
-    if args.switchbot_133:
-        parser.error('--scale cannot be used together with --switchbot-133')
-
-# Apply --switchbot-133 preset (width=1200, height=1600; swap if --dir is specified)
-if args.switchbot_133:
-    args.width = 1200
-    args.height = 1600
-    if args.dir == 'landscape':
-        args.width, args.height = args.height, args.width
-
-# Fill in any missing fixed dimension when at least one of --width/--height is given
-if args.width is not None and args.width <= 0:
-    parser.error('--width must be a positive integer')
-
-if args.height is not None and args.height <= 0:
-    parser.error('--height must be a positive integer')
-
-# Add comments about dithering options
-if args.dither == 3:  # Floyd-Steinberg
-    print("Using Floyd-Steinberg dithering. Note: dither option 1 (Atkinson) can be used for better visual results")
-elif args.dither == 1:  # Atkinson
-    print("Using Atkinson dithering. Note: dither option 3 (Floyd-Steinberg) is 80x faster but gives less visual quality")
-
-# Get input parameters
-input_paths = args.input_paths
-display_direction = args.dir
-display_mode = args.mode
-display_dither = Image.Dither(args.dither)
-
-# Define function to process a single image file
-
-
-def process_image(image_file):
+def process_image(image_file, args):
     try:
         # Determine output filename and check if it can be skipped.
         # BMP file size for a 24-bit RGB image: 54-byte header + row-aligned pixel data.
         dither_label = 'ATK' if args.dither == 1 else 'FS' if args.dither == 3 else ''
         output_filename = os.path.splitext(image_file)[
-            0] + '_' + display_mode + ('_' + dither_label if dither_label else '') + '_output.bmp'
+            0] + '_' + args.mode + ('_' + dither_label if dither_label else '') + '_output.bmp'
 
         # Read input image
         input_image = Image.open(image_file)
@@ -207,7 +132,7 @@ def process_image(image_file):
         except OSError:
             pass
 
-        if display_mode == 'scale':
+        if args.mode == 'scale':
             # Computed scaling
             scale_ratio = max(target_width / width, target_height / height)
 
@@ -216,7 +141,8 @@ def process_image(image_file):
             resized_height = int(height * scale_ratio)
 
             # Resize image
-            output_image = input_image.resize((resized_width, resized_height))
+            output_image = input_image.resize(
+                (resized_width, resized_height))
 
             # Create the target image and center the resized image
             resized_image = Image.new(
@@ -224,7 +150,7 @@ def process_image(image_file):
             left = (target_width - resized_width) // 2
             top = (target_height - resized_height) // 2
             resized_image.paste(output_image, (left, top))
-        elif display_mode == 'cut':
+        elif args.mode == 'cut':
             # Calculate the fill size to add or the area to crop
             if width / height >= target_width / target_height:
                 # The image aspect ratio is larger than the target aspect ratio, and padding needs to be added on the left and right
@@ -266,14 +192,15 @@ def process_image(image_file):
         # Create a palette object
         pal_image = Image.new("P", (1, 1))
         pal_image.putpalette((0, 0, 0,  255, 255, 255,  255, 255, 0,
-                             255, 0, 0,  0, 0, 0,  0, 0, 255,  0, 255, 0) + (0, 0, 0)*249)
+                              255, 0, 0,  0, 0, 0,  0, 0, 255,  0, 255, 0) + (0, 0, 0)*249)
 
         # The color quantization and dithering algorithms are performed, and the results are converted to RGB mode
         if args.dither == 1:  # Atkinson dithering
-            quantized_image = quantize_atkinson(enhanced_image).convert('RGB')
+            quantized_image = quantize_atkinson(
+                enhanced_image).convert('RGB')
         else:
             quantized_image = enhanced_image.quantize(
-                dither=display_dither, palette=pal_image).convert('RGB')
+                dither=Image.Dither(args.dither), palette=pal_image).convert('RGB')
 
         # Save output image
         quantized_image.save(output_filename)
@@ -282,45 +209,140 @@ def process_image(image_file):
         print(f'Error processing {image_file}: {e}')
 
 
-# Collect all image files from input paths
-image_extensions = ['.jpg', '.jpeg', '.png',
-                    '.tiff', '.tif', '.webp', '.gif', '.heic']
-all_image_files = []
+def wrap_process_image(params):
+    process_image(*params)
 
-for input_path in input_paths:
-    # Check if input path exists
-    if not os.path.exists(input_path):
-        print(f'Error: path {input_path} does not exist')
-        continue
 
-    # Determine if input is a file or directory
-    if os.path.isfile(input_path):
-        # Add single file
-        all_image_files.append(input_path)
-    elif os.path.isdir(input_path):
-        # Add all image files from directory
-        for file in os.listdir(input_path):
-            file_path = os.path.join(input_path, file)
-            if (os.path.isfile(file_path) and
-                    any(file.lower().endswith(ext) for ext in image_extensions)):
-                all_image_files.append(file_path)
+def main():
 
-        # Check if directory has any image files
-        has_images = False
-        for file in os.listdir(input_path):
-            if any(file.lower().endswith(ext) for ext in image_extensions):
-                has_images = True
-                break
-        if not has_images:
-            print(f'Warning: no image files found in directory {input_path}')
-    else:
-        print(f'Error: {input_path} is not a valid file or directory')
+    # Create an ArgumentParser object
+    parser = argparse.ArgumentParser(description='Process some images.')
 
-# Process all collected image files with progress bar
-if not all_image_files:
-    print('Error: no valid image files to process')
-    sys.exit(1)
+    # Add orientation parameter
+    parser.add_argument('input_paths', nargs='+', type=str,
+                        help='Input image file(s) or directory')
+    parser.add_argument('--dir', choices=['landscape', 'portrait'],
+                        help='Image direction (landscape or portrait)')
+    parser.add_argument('--width', type=int, default=None,
+                        help='Target image width in pixels. Cannot be used with --scale')
+    parser.add_argument('--height', type=int, default=None,
+                        help='Target image height in pixels. Cannot be used with --scale')
+    parser.add_argument('--scale', type=float, default=1.0,
+                        help='Scale factor for output image size relative to the original (e.g., 1.0 = same size as original). Cannot be used with --width or --height (default: 1.0)')
+    parser.add_argument('--mode', choices=['scale', 'cut'],
+                        default='scale', help='Image conversion mode (scale or cut)')
+    parser.add_argument('--dither', type=int, choices=[0, 1, 3], default=1,
+                        help='Image dithering algorithm (0 for NONE, 1 for ATKINSON (slow), 3 for FLOYDSTEINBERG)')
+    # Add enhancement arguments
+    parser.add_argument('--brightness', type=float, default=1.1,
+                        help='Brightness factor (1.0 = no change)')
+    parser.add_argument('--contrast', type=float, default=1.2,
+                        help='Contrast factor (1.0 = no change)')
+    parser.add_argument('--saturation', type=float, default=1.2,
+                        help='Color saturation factor (1.0 = no change)')
+    parser.add_argument('--switchbot-133', action='store_true',
+                        help='Preset for SwitchBot AI Canvas 13.3 inch (width=1200, height=1600; swapped when --dir is also specified)')
+    parser.add_argument('--processes', type=int, default=4,
+                        help='Number of parallel processes to use for image conversion (default: 4)')
 
-print(f'Found {len(all_image_files)} image files to process')
-for image_file in tqdm(all_image_files, desc="Processing images", unit="file"):
-    process_image(image_file)
+    # Parse command line arguments
+    args = parser.parse_args()
+
+    # Detect whether --scale was explicitly provided on the command line
+    _scale_explicit = any(arg == '--scale' or arg.startswith('--scale=')
+                          for arg in sys.argv)
+
+    # Validate --scale value is positive
+    if args.scale <= 0:
+        parser.error('--scale must be a positive number')
+
+    # Validate --scale is not combined with --width, --height, or --switchbot-133
+    if _scale_explicit:
+        if args.width is not None or args.height is not None:
+            parser.error(
+                '--scale cannot be used together with --width or --height')
+        if args.switchbot_133:
+            parser.error(
+                '--scale cannot be used together with --switchbot-133')
+
+    # Apply --switchbot-133 preset (width=1200, height=1600; swap if --dir is specified)
+    if args.switchbot_133:
+        args.width = 1200
+        args.height = 1600
+        if args.dir == 'landscape':
+            args.width, args.height = args.height, args.width
+
+    # Fill in any missing fixed dimension when at least one of --width/--height is given
+    if args.width is not None and args.width <= 0:
+        parser.error('--width must be a positive integer')
+
+    if args.height is not None and args.height <= 0:
+        parser.error('--height must be a positive integer')
+
+    # Add comments about dithering options
+    if args.dither == 3:  # Floyd-Steinberg
+        print("Using Floyd-Steinberg dithering. Note: dither option 1 (Atkinson) can be used for better visual results")
+    elif args.dither == 1:  # Atkinson
+        print("Using Atkinson dithering. Note: dither option 3 (Floyd-Steinberg) is 80x faster but gives less visual quality")
+
+    # Define function to process a single image file
+
+    # Collect all image files from input paths
+    image_extensions = ['.jpg', '.jpeg', '.png',
+                        '.tiff', '.tif', '.webp', '.gif', '.heic']
+    all_image_files = []
+
+    for input_path in args.input_paths:
+        # Check if input path exists
+        if not os.path.exists(input_path):
+            print(f'Error: path {input_path} does not exist')
+            continue
+
+        # Determine if input is a file or directory
+        if os.path.isfile(input_path):
+            # Add single file
+            all_image_files.append(input_path)
+        elif os.path.isdir(input_path):
+            # Add all image files from directory
+            for file in os.listdir(input_path):
+                file_path = os.path.join(input_path, file)
+                if (os.path.isfile(file_path) and
+                        any(file.lower().endswith(ext) for ext in image_extensions)):
+                    all_image_files.append(file_path)
+
+            # Check if directory has any image files
+            has_images = False
+            for file in os.listdir(input_path):
+                if any(file.lower().endswith(ext) for ext in image_extensions):
+                    has_images = True
+                    break
+            if not has_images:
+                print(
+                    f'Warning: no image files found in directory {input_path}')
+        else:
+            print(f'Error: {input_path} is not a valid file or directory')
+
+    # Process all collected image files with progress bar
+    if not all_image_files:
+        print('Error: no valid image files to process')
+        sys.exit(1)
+
+    print(f'Found {len(all_image_files)} image files to process')
+    # for image_file in tqdm(all_image_files, desc="Processing images", unit="file"):
+    #     process_image(image_file)
+    with mp.Pool(processes=args.processes) as p:
+        list(tqdm(p.imap_unordered(wrap_process_image,
+                                   [(f, args) for f in all_image_files]),
+                  desc="Processing images",
+                  unit="file",
+                  total=len(all_image_files)))
+        # list(tqdm(p.imap_unordered(lambda f: process_image(f, args),
+        #                            all_image_files),
+        #           desc="Processing images",
+        #           unit="file",
+        #           total=len(all_image_files)))
+
+
+if __name__ == '__main__':
+    mp.freeze_support()  # Windowsで必要な場合がある
+    main()
