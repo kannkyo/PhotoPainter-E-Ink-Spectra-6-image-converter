@@ -1,6 +1,7 @@
 # encoding: utf-8
 
 import argparse
+import glob
 import multiprocessing as mp
 import os.path
 import sys
@@ -278,22 +279,27 @@ def main():
     # Define function to process a single image file
 
     # Collect all image files from input paths
-    image_extensions = ['.jpg', '.jpeg',
-                        '.png',
-                        '.tiff', '.tif',
-                        '.webp',
-                        '.gif',
-                        '.heic']
+    extensions = ['.jpg', '.jpeg',
+                  '.png',
+                  '.tiff', '.tif',
+                  '.webp',
+                  '.gif',
+                  '.heic']
     all_image_files = []
 
     for input_path in args.input_paths:
-        # Check if input path exists
-        if not os.path.exists(input_path):
-            print(f'Error: path {input_path} does not exist')
-            continue
-
         # Determine if input is a file or directory
-        if os.path.isfile(input_path):
+        if '*' in input_path or '?' in input_path or '[' in input_path:
+            matched_files = glob.glob(input_path)
+            if not matched_files:
+                print(f'Warning: no files matched the pattern {input_path}')
+            else:
+                for file_path in matched_files:
+                    print(f'Found file: {file_path}')
+                    if (os.path.isfile(file_path) and
+                            any(file_path.lower().endswith(ext) for ext in extensions)):  # noqa
+                        all_image_files.append(file_path)
+        elif os.path.isfile(input_path):
             # Add single file
             all_image_files.append(input_path)
         elif os.path.isdir(input_path):
@@ -301,13 +307,13 @@ def main():
             for file in os.listdir(input_path):
                 file_path = os.path.join(input_path, file)
                 if (os.path.isfile(file_path) and
-                        any(file.lower().endswith(ext) for ext in image_extensions)):
+                        any(file.lower().endswith(ext) for ext in extensions)):
                     all_image_files.append(file_path)
 
             # Check if directory has any image files
             has_images = False
             for file in os.listdir(input_path):
-                if any(file.lower().endswith(ext) for ext in image_extensions):
+                if any(file.lower().endswith(ext) for ext in extensions):
                     has_images = True
                     break
             if not has_images:
