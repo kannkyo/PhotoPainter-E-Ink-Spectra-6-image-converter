@@ -34,10 +34,16 @@ PALETTE_ARRAY = np.array(PALETTE_COLORS, dtype=np.float32)
 PALETTE_LUMA_ARRAY = np.array(
     [r*250 + g*350 + b*400 for (r, g, b) in PALETTE_COLORS], dtype=np.float32) / (255.0 * 1000)
 
-# Find the closest palette color using floating-point arithmetic (exact RGBL method)
-
 
 def closest_palette_color(rgb):
+    """Find the closest palette color using floating-point arithmetic (exact RGBL method)
+
+    Args:
+        rgb (tuple): Input RGB color as a tuple of three integers (R, G, B).
+
+    Returns:
+        int: Index of the closest palette color in PALETTE_COLORS.
+    """
     r1, g1, b1 = rgb
     # Calculate luma for the input pixel
     luma1 = (r1 * 250 + g1 * 350 + b1 * 400) / (255.0 * 1000)
@@ -62,8 +68,6 @@ def closest_palette_color(rgb):
 
     # Find minimum distance index
     return np.argmin(total_dist)
-
-# Atkinson dithering implementation with floating-point error diffusion for accuracy
 
 
 def quantize_atkinson(image):
@@ -114,8 +118,7 @@ def process_image(image_file, args):
         # Determine output filename and check if it can be skipped.
         # BMP file size for a 24-bit RGB image: 54-byte header + row-aligned pixel data.
         dither_label = 'ATK' if args.dither == 1 else 'FS' if args.dither == 3 else ''
-        output_filename = os.path.splitext(image_file)[
-            0] + '_' + args.mode + ('_' + dither_label if dither_label else '') + '_output.bmp'
+        output_filename = os.path.splitext(image_file)[0] + '_' + args.mode + ('_' + dither_label if dither_label else '') + '_output.bmp'  # noqa
 
         # Read input image
         input_image = Image.open(image_file)
@@ -209,11 +212,9 @@ def process_image(image_file, args):
 
         # The color quantization and dithering algorithms are performed, and the results are converted to RGB mode
         if args.dither == 1:  # Atkinson dithering
-            quantized_image = quantize_atkinson(
-                enhanced_image).convert('RGB')
+            quantized_image = quantize_atkinson(enhanced_image).convert('RGB')  # noqa
         else:
-            quantized_image = enhanced_image.quantize(
-                dither=Image.Dither(args.dither), palette=pal_image).convert('RGB')
+            quantized_image = enhanced_image.quantize(dither=Image.Dither(args.dither), palette=pal_image).convert('RGB')  # noqa
 
         # Save output image
         quantized_image.save(output_filename)
@@ -243,8 +244,7 @@ def main():
     parser.add_argument('--brightness', type=float, default=1.1, help='Brightness factor (1.0 = no change)')  # noqa
     parser.add_argument('--contrast', type=float, default=1.2, help='Contrast factor (1.0 = no change)')  # noqa
     parser.add_argument('--saturation', type=float, default=1.2, help='Color saturation factor (1.0 = no change)')  # noqa
-    parser.add_argument('--switchbot-133', action='store_true', help='Preset for SwitchBot AI Canvas 13.3 inch (width=1200, height=1600; swapped when --dir is also specified)')  # noqa
-    parser.add_argument('--processes', type=int, default=4, help='Number of parallel processes to use for image conversion (default: 4)')  # noqa
+    parser.add_argument('--processes', type=int, default=1, help='Number of parallel processes to use for image conversion (default: 1)')  # noqa
 
     # Parse command line arguments
     args = parser.parse_args()
@@ -257,19 +257,10 @@ def main():
     if args.scale <= 0:
         parser.error('--scale must be a positive number')
 
-    # Validate --scale is not combined with --width, --height, or --switchbot-133
+    # Validate --scale is not combined with --width, --height
     if _scale_explicit:
         if args.width is not None or args.height is not None:
             parser.error('--scale cannot be used together with --width or --height')  # noqa
-        if args.switchbot_133:
-            parser.error('--scale cannot be used together with --switchbot-133')  # noqa
-
-    # Apply --switchbot-133 preset (width=1200, height=1600; swap if --dir is specified)
-    if args.switchbot_133:
-        args.width = 1200
-        args.height = 1600
-        if args.dir == 'landscape':
-            args.width, args.height = args.height, args.width
 
     # Fill in any missing fixed dimension when at least one of --width/--height is given
     if args.width is not None and args.width <= 0:
@@ -287,8 +278,12 @@ def main():
     # Define function to process a single image file
 
     # Collect all image files from input paths
-    image_extensions = ['.jpg', '.jpeg', '.png',
-                        '.tiff', '.tif', '.webp', '.gif', '.heic']
+    image_extensions = ['.jpg', '.jpeg',
+                        '.png',
+                        '.tiff', '.tif',
+                        '.webp',
+                        '.gif',
+                        '.heic']
     all_image_files = []
 
     for input_path in args.input_paths:
@@ -326,8 +321,8 @@ def main():
         print('Error: no valid image files to process')
         sys.exit(1)
 
-    print(f'Found {len(all_image_files)} images to process by {args.processes} parallel processes')  # noqa
     if args.processes > 1:
+        print(f'Found {len(all_image_files)} images to process by {args.processes} parallel processes')  # noqa
         with mp.Pool(processes=args.processes) as p:
             list(tqdm(p.imap_unordered(wrap_process_image,
                                        [(f, args) for f in all_image_files]),
@@ -335,6 +330,7 @@ def main():
                       unit="file",
                       total=len(all_image_files)))
     else:
+        print(f'Found {len(all_image_files)} images to process sequentially')  # noqa
         for image_file in tqdm(all_image_files, desc="Processing images", unit="file"):
             process_image(image_file, args)
 
