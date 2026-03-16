@@ -67,6 +67,15 @@ def closest_palette_color(rgb):
 
 
 def quantize_atkinson(image):
+    """Atkinson dithering implementation with floating-point error diffusion for accuracy
+
+    Args:
+        image (PIL.Image.Image): Input image to be quantized.
+
+    Returns:
+        PIL.Image.Image: Quantized image with Atkinson dithering applied.
+    """
+
     img_array = np.array(image.convert('RGB'))
     height, width, _ = img_array.shape
     # Use float array for error diffusion to avoid integer truncation issues
@@ -76,8 +85,7 @@ def quantize_atkinson(image):
         for x in range(width):
             old_pixel = working_img[y, x].copy()
             # Use exact color comparison instead of lookup table for better accuracy
-            idx = closest_palette_color(
-                tuple(np.clip(old_pixel, 0, 255).astype(int)))
+            idx = closest_palette_color(tuple(np.clip(old_pixel, 0, 255).astype(int)))  # noqa
             new_pixel = np.array(PALETTE_COLORS[idx], dtype=np.float32)
             working_img[y, x] = new_pixel
 
@@ -191,8 +199,13 @@ def process_image(image_file, args):
 
         # Create a palette object
         pal_image = Image.new("P", (1, 1))
-        pal_image.putpalette((0, 0, 0,  255, 255, 255,  255, 255, 0,
-                              255, 0, 0,  0, 0, 0,  0, 0, 255,  0, 255, 0) + (0, 0, 0)*249)
+        pal_image.putpalette((0, 0, 0,
+                              255, 255, 255,
+                              255, 255, 0,
+                              255, 0, 0,
+                              0, 0, 0,
+                              0, 0, 255,
+                              0, 255, 0) + (0, 0, 0)*249)
 
         # The color quantization and dithering algorithms are performed, and the results are converted to RGB mode
         if args.dither == 1:  # Atkinson dithering
@@ -219,31 +232,19 @@ def main():
     parser = argparse.ArgumentParser(description='Process some images.')
 
     # Add orientation parameter
-    parser.add_argument('input_paths', nargs='+', type=str,
-                        help='Input image file(s) or directory')
-    parser.add_argument('--dir', choices=['landscape', 'portrait'],
-                        help='Image direction (landscape or portrait)')
-    parser.add_argument('--width', type=int, default=None,
-                        help='Target image width in pixels. Cannot be used with --scale')
-    parser.add_argument('--height', type=int, default=None,
-                        help='Target image height in pixels. Cannot be used with --scale')
-    parser.add_argument('--scale', type=float, default=1.0,
-                        help='Scale factor for output image size relative to the original (e.g., 1.0 = same size as original). Cannot be used with --width or --height (default: 1.0)')
-    parser.add_argument('--mode', choices=['scale', 'cut'],
-                        default='scale', help='Image conversion mode (scale or cut)')
-    parser.add_argument('--dither', type=int, choices=[0, 1, 3], default=1,
-                        help='Image dithering algorithm (0 for NONE, 1 for ATKINSON (slow), 3 for FLOYDSTEINBERG)')
+    parser.add_argument('input_paths', nargs='+', type=str, help='Input image file(s) or directory')  # noqa
+    parser.add_argument('--dir', choices=['landscape', 'portrait'], help='Image direction (landscape or portrait)')  # noqa
+    parser.add_argument('--width', type=int, default=None, help='Target image width in pixels. Cannot be used with --scale')  # noqa
+    parser.add_argument('--height', type=int, default=None, help='Target image height in pixels. Cannot be used with --scale')  # noqa
+    parser.add_argument('--scale', type=float, default=1.0, help='Scale factor for output image size relative to the original (e.g., 1.0 = same size as original). Cannot be used with --width or --height (default: 1.0)')  # noqa
+    parser.add_argument('--mode', choices=['scale', 'cut'], default='scale', help='Image conversion mode (scale or cut)')  # noqa
+    parser.add_argument('--dither', type=int, choices=[0, 1, 3], default=1, help='Image dithering algorithm (0 for NONE, 1 for ATKINSON (slow), 3 for FLOYDSTEINBERG)')  # noqa
     # Add enhancement arguments
-    parser.add_argument('--brightness', type=float, default=1.1,
-                        help='Brightness factor (1.0 = no change)')
-    parser.add_argument('--contrast', type=float, default=1.2,
-                        help='Contrast factor (1.0 = no change)')
-    parser.add_argument('--saturation', type=float, default=1.2,
-                        help='Color saturation factor (1.0 = no change)')
-    parser.add_argument('--switchbot-133', action='store_true',
-                        help='Preset for SwitchBot AI Canvas 13.3 inch (width=1200, height=1600; swapped when --dir is also specified)')
-    parser.add_argument('--processes', type=int, default=4,
-                        help='Number of parallel processes to use for image conversion (default: 4)')
+    parser.add_argument('--brightness', type=float, default=1.1, help='Brightness factor (1.0 = no change)')  # noqa
+    parser.add_argument('--contrast', type=float, default=1.2, help='Contrast factor (1.0 = no change)')  # noqa
+    parser.add_argument('--saturation', type=float, default=1.2, help='Color saturation factor (1.0 = no change)')  # noqa
+    parser.add_argument('--switchbot-133', action='store_true', help='Preset for SwitchBot AI Canvas 13.3 inch (width=1200, height=1600; swapped when --dir is also specified)')  # noqa
+    parser.add_argument('--processes', type=int, default=4, help='Number of parallel processes to use for image conversion (default: 4)')  # noqa
 
     # Parse command line arguments
     args = parser.parse_args()
@@ -259,11 +260,9 @@ def main():
     # Validate --scale is not combined with --width, --height, or --switchbot-133
     if _scale_explicit:
         if args.width is not None or args.height is not None:
-            parser.error(
-                '--scale cannot be used together with --width or --height')
+            parser.error('--scale cannot be used together with --width or --height')  # noqa
         if args.switchbot_133:
-            parser.error(
-                '--scale cannot be used together with --switchbot-133')
+            parser.error('--scale cannot be used together with --switchbot-133')  # noqa
 
     # Apply --switchbot-133 preset (width=1200, height=1600; swap if --dir is specified)
     if args.switchbot_133:
@@ -327,20 +326,17 @@ def main():
         print('Error: no valid image files to process')
         sys.exit(1)
 
-    print(f'Found {len(all_image_files)} image files to process')
-    # for image_file in tqdm(all_image_files, desc="Processing images", unit="file"):
-    #     process_image(image_file)
-    with mp.Pool(processes=args.processes) as p:
-        list(tqdm(p.imap_unordered(wrap_process_image,
-                                   [(f, args) for f in all_image_files]),
-                  desc="Processing images",
-                  unit="file",
-                  total=len(all_image_files)))
-        # list(tqdm(p.imap_unordered(lambda f: process_image(f, args),
-        #                            all_image_files),
-        #           desc="Processing images",
-        #           unit="file",
-        #           total=len(all_image_files)))
+    print(f'Found {len(all_image_files)} images to process by {args.processes} parallel processes')  # noqa
+    if args.processes > 1:
+        with mp.Pool(processes=args.processes) as p:
+            list(tqdm(p.imap_unordered(wrap_process_image,
+                                       [(f, args) for f in all_image_files]),
+                      desc="Processing images",
+                      unit="file",
+                      total=len(all_image_files)))
+    else:
+        for image_file in tqdm(all_image_files, desc="Processing images", unit="file"):
+            process_image(image_file, args)
 
 
 if __name__ == '__main__':
