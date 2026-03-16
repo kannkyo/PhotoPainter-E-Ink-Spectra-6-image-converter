@@ -8,7 +8,7 @@ import sys
 
 import numpy as np
 import pillow_heif
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImagePalette
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from tqdm import tqdm
 
 pillow_heif.register_heif_opener()

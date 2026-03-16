@@ -11,3 +11,8 @@ name = "e-ink-spectra-6-image-converter"
 readme = "README.md"
 requires-python = ">=3.10"
 version = "0.1.0"
+
+[dependency-groups]
+dev = [
+  "pyinstaller>=6.19.0",
+]
